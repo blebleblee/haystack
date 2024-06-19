@@ -1,0 +1,1122 @@
+#!/bin/bash
+set -e
+
+prog=${0##*/}
+source $(dirname "$(readlink -f "$0")")/functions.sh
+
+function usage ()
+{
+    cat << EOF
+NAME
+    kvm-install-vm - Install virtual guests using cloud-init on a local KVM
+    hypervisor.
+
+SYNOPSIS
+    $prog COMMAND [OPTIONS]
+
+DESCRIPTION
+    A bash wrapper around virt-install to build virtual machines on a local KVM
+    hypervisor. You can run it as a normal user which will use qemu:///session
+    to connect locally to your KVM domains.
+
+COMMANDS
+    create      - create a new guest domain
+    remove      - delete a guest domain
+    list        - list all domains, running and stopped
+    attach-disk - create and attach a disk device to a guest domain
+    detach-disk - detach a disk device from a guest domain
+    attach-nvme - create and attach a nvme device to a guest domain (VM reboot required)
+    attach-nic  - create and attach a network interface to a guest domain
+    help        - show this help or help for a subcommand
+EOF
+    exit 0
+}
+
+function usage_subcommand ()
+{
+    case "$1" in
+        create)
+            printf "NAME\n"
+            printf "    $prog create [COMMANDS] [OPTIONS] VMNAME\n"
+            printf "\n"
+            printf "DESCRIPTION\n"
+            printf "    Create a new guest domain.\n"
+            printf "\n"
+            printf "COMMANDS\n"
+            printf "    help - show this help\n"
+            printf "\n"
+            printf "OPTIONS\n"
+            printf "    -a          Autostart             (default: false)\n"
+            printf "    -b          Bridge                (default: br0)\n"
+            printf "    -c          Number of vCPUs       (default: 2)\n"
+            printf "    -d          Disk Size (GB)        (default: 20)\n"
+            printf "    -D          DNS Domain            (default: example.local)\n"
+            printf "    -f          CPU Model / Feature   (default: host-passthrough)\n"
+            printf "    -g          Graphics type         (default: spice)\n"
+            printf "    -G          Default Gateway       (default: dhcp)\n"
+            printf "    -h          Display help\n"
+            printf "    -i          Custom QCOW2 Image\n"
+            printf "    -I          IP address/netmask    (default: dhcp)\n"
+            printf "    -k          SSH Public Key        (default: $HOME/.ssh/id_rsa.pub)\n"
+            printf "    -l          Location of Images    (default: $HOME/virt/images)\n"
+            printf "    -L          Location of VMs       (default: $HOME/virt/vms)\n"
+            printf "    -m          Memory Size (MB)      (default: 2048)\n"
+            printf "    -M          Mac address           (default: auto-assigned)\n"
+            printf "    -p          Console port          (default: auto)\n"
+            printf "    -R          Resolver(s)           (default: dhcp)\n"
+            printf "    -s          Custom shell script\n"
+            printf "    -t          Linux Distribution    (default: sles155)\n"
+            printf "    -T          Timezone              (default: UTC)\n"
+            printf "    -u          Custom user           (default: $USER)\n"
+            printf "    -y          Assume yes to prompts (default: false)\n"
+            printf "    -n          Assume no to prompts  (default: false)\n"
+            printf "    -v          Be verbose\n"
+            printf "\n"
+            printf "DISTRIBUTIONS\n"
+            printf "    NAME            DESCRIPTION                         LOGIN\n"
+            printf "    centos8         CentOS 8                            centos\n"
+            printf "    centos7         CentOS 7                            centos\n"
+            printf "    debian12        Debian 12 (Bookworm)                debian\n"
+            printf "    fedora38        Fedora 38                           fedora\n"
+            printf "    fedora39        Fedora 39                           fedora\n"
+            printf "    opensuse154     OpenSUSE Leap 15.4                  opensuse\n"
+            printf "    opensuse155     OpenSUSE Leap 15.5                  opensuse\n"
+            printf "    opensuse156     OpenSUSE Leap 15.6                  opensuse\n"
+            printf "    micro6          SUSE Linux Micro 6.0 .              sles\n"
+            printf "    sles152         SUSE Enterprise Linux 15 SP2        sles\n"
+            printf "    sles153         SUSE Enterprise Linux 15 SP3        sles\n"
+            printf "    sles154         SUSE Enterprise Linux 15 SP4        sles\n"
+            printf "    sles155         SUSE Enterprise Linux 15 SP5        sles\n"
+            printf "    sles155qu1      SUSE Enterprise Linux 15 SP5 QU1    sles\n"
+            printf "    sles156         SUSE Enterprise Linux 15 SP6        sles\n"
+            printf "    ubuntu1804      Ubuntu 18.04 LTS (Bionic Beaver)    ubuntu\n"
+            printf "    ubuntu2004      Ubuntu 20.04 LTS (Focal Fossa)      ubuntu\n"
+            printf "    ubuntu2204      Ubuntu 22.04 LTS (Jammy Jellyfish)  ubuntu\n"
+            printf "    rocky9.3        Rocky Linux                         rocky\n"
+            printf "    rhel7.9         Red Hat Enterprise Linux 7.9        rhel\n"
+            printf "    rhel8.9         Red Hat Enterprise Linux 8.9        rhel\n"
+            printf "\n"
+            printf "EXAMPLES\n"
+            printf "    $prog create foo\n"
+            printf "        Create VM with the default parameters: SLES 15 SP5, 2 vCPU, 2GB RAM,\n"
+            printf "        20GB of disk capacity.\n"
+            printf "\n"
+            printf "    $prog create -c 4 -m 4096 -d 30 foo\n"
+            printf "        Create VM with custom parameters: 4 vCPUs, 4GB RAM, and 30GB of disk\n"
+            printf "        capacity.\n"
+            printf "\n"
+            printf "    $prog create -T UTC -u bar -v foo\n"
+            printf "        Create a default VM with UTC timezone, custom user \"bar\" and be verbose.\n"
+            printf "\n"
+            printf "    $prog create -I 192.168.200.202/23 -R 192.168.200.2 -G 192.168.200.1 foo\n"
+            printf "        Create VM with static network settings: IP address 192.168.200.202/23, DNS server 192.168.200.2\n"
+            printf "        and default gateway 192.168.200.1. All three parameters are required.\n"
+            printf "\n"
+            ;;
+        remove)
+            printf "NAME\n"
+            printf "    $prog remove [COMMANDS] VMNAME\n"
+            printf "\n"
+            printf "DESCRIPTION\n"
+            printf "    Destroys (stops) and undefines a guest domain. This also removes the\n"
+            printf "    associated storage pool.\n"
+            printf "\n"
+            printf "COMMANDS\n"
+            printf "    help - show this help\n"
+            printf "\n"
+            printf "OPTIONS\n"
+            printf "    -l          Location of Images  (default: $HOME/virt/images)\n"
+            printf "    -L          Location of VMs     (default: $HOME/virt/vms)\n"
+            printf "    -v          Be verbose\n"
+            printf "\n"
+            printf "EXAMPLE\n"
+            printf "    $prog remove foo\n"
+            printf "        Remove (destroy and undefine) a guest domain.  WARNING: This will\n"
+            printf "        delete the guest domain and any changes made inside it!\n"
+            ;;
+        attach-disk)
+            printf "NAME\n"
+            printf "    $prog attach-disk [OPTIONS] [COMMANDS] VMNAME\n"
+            printf "\n"
+            printf "DESCRIPTION\n"
+            printf "    Attaches a new disk to a guest domain.\n"
+            printf "\n"
+            printf "COMMANDS\n"
+            printf "    help - show this help\n"
+            printf "\n"
+            printf "OPTIONS\n"
+            printf "    -d SIZE     Disk size (GB)\n"
+            printf "    -f FORMAT   Disk image format       (default: qcow2)\n"
+            printf "    -s IMAGE    Source of disk device\n"
+            printf "    -t TARGET   Disk device target\n"
+            printf "\n"
+            printf "EXAMPLE\n"
+            printf "    $prog attach-disk -d 10 -s example-5g.qcow2 -t vdb foo\n"
+            printf "        Attach a 10GB disk device named example-5g.qcow2 to the foo guest\n"
+            printf "        domain.\n"
+            ;;
+        detach-disk)
+            printf "NAME\n"
+            printf "    $prog detach-disk [OPTIONS] [COMMANDS] VMNAME\n"
+            printf "\n"
+            printf "DESCRIPTION\n"
+            printf "    Detaches a disk from a guest domain.\n"
+            printf "\n"
+            printf "COMMANDS\n"
+            printf "    help - show this help\n"
+            printf "\n"
+            printf "OPTIONS\n"
+            printf "    -s IMAGE    Source of disk device\n"
+            printf "\n"
+            printf "EXAMPLE\n"
+            printf "    $prog detach-disk -s example-vdb-5G.qcow2 foo\n"
+            printf "        Detach a 5GB disk device with source name example-vdb-5G.qcow2\n"
+            printf "        from the foo guest domain.\n"
+            ;;
+        attach-nvme)
+            printf "NAME\n"
+            printf "    $prog attach-nvme [OPTIONS] [COMMANDS] VMNAME\n"
+            printf "\n"
+            printf "DESCRIPTION\n"
+            printf "    Attaches a new NVMe disk to a guest domain. VM will be restarted.\n"
+            printf "\n"
+            printf "COMMANDS\n"
+            printf "    help - show this help\n"
+            printf "\n"
+            printf "OPTIONS\n"
+            printf "    -d SIZE     Disk size (GB)\n"
+            printf "    -f FORMAT   Disk image format       (default: qcow2)\n"
+            printf "\n"
+            printf "EXAMPLE\n"
+            printf "    $prog attach-nvme -d 20 -f qcow2 foo\n"
+            printf "        Attach 20GB NVMe device to the foo guest domain.\n"
+            ;;
+        attach-nic)
+            printf "NAME\n"
+            printf "    $prog detach-nic [OPTIONS] [COMMANDS] VMNAME\n"
+            printf "\n"
+            printf "DESCRIPTION\n"
+            printf "    Attaches a new network interface to a guest domain.\n"
+            printf "\n"
+            printf "COMMANDS\n"
+            printf "    help - show this help\n"
+            printf "\n"
+            printf "OPTIONS\n"
+            printf "    -m MODEL   Model of new network interface     (default: virtio)\n"
+            printf "    -b BRIDGE  Bridge                             (default: br0)\n"
+            printf "\n"
+            printf "EXAMPLE\n"
+            printf "    $prog attach-nic -t e1000 -b br-rancher foo\n"
+            printf "        Attach a new network interface of type e1000. Target bridge is br-rancher\n"
+            printf "        and guest domain foo.\n"
+            ;;
+        list)
+            printf "NAME\n"
+            printf "    $prog list\n"
+            printf "\n"
+            printf "DESCRIPTION\n"
+            printf "    Lists all running and stopped guest domains.\n"
+            ;;
+        *)
+            printf "'$subcommand' is not a valid subcommand.\n"
+            exit 1
+            ;;
+    esac
+    exit 0
+}
+
+function fetch_images ()
+{
+    # Create image directory if it doesn't already exist
+    mkdir -p "${IMAGEDIR}"
+
+    # Set variables based on $DISTRO
+    # Use the command "osinfo-query os" to get the list of the accepted OS variants.
+    case "$DISTRO" in
+        centos8)
+            QCOW=CentOS-8-GenericCloud-8.4.2105-20210603.0.x86_64.qcow2
+            OS_VARIANT="centos8"
+            IMAGE_URL=https://cloud.centos.org/centos/8/x86_64/images
+            DISK_FORMAT=qcow2
+            LOGIN_USER=centos
+            ;;
+        centos7)
+            QCOW=CentOS-7-x86_64-GenericCloud.qcow2
+            OS_VARIANT="centos7.0"
+            IMAGE_URL=https://cloud.centos.org/centos/7/images
+            DISK_FORMAT=qcow2
+            LOGIN_USER=centos
+            ;;
+        debian12)
+            QCOW=debian-12-generic-amd64.qcow2
+            OS_VARIANT="debian12"
+            IMAGE_URL=https://cloud.debian.org/images/cloud/bookworm/latest
+            DISK_FORMAT=qcow2
+            LOGIN_USER=debian
+            ;;
+        fedora38)
+            QCOW=Fedora-Cloud-Base-38-1.6.x86_64.qcow2
+            OS_VARIANT="fedora38"
+            IMAGE_URL=https://download.fedoraproject.org/pub/fedora/linux/releases/38/Cloud/x86_64/images
+            DISK_FORMAT=qcow2
+            LOGIN_USER=fedora
+            ;;
+        fedora39)
+            QCOW=Fedora-Cloud-Base-39-1.5.x86_64.qcow2
+            OS_VARIANT="fedora38"
+            IMAGE_URL=https://download.fedoraproject.org/pub/fedora/linux/releases/39/Cloud/x86_64/images
+            DISK_FORMAT=qcow2
+            LOGIN_USER=fedora
+            ;;
+        opensuse154)
+            QCOW=openSUSE-Leap-15.4.x86_64-NoCloud.qcow2
+            OS_VARIANT="opensuse15.4"
+            IMAGE_URL=https://download.opensuse.org/repositories/Cloud:/Images:/Leap_15.4/images
+            DISK_FORMAT=qcow2
+            LOGIN_USER=opensuse
+            ;;
+        opensuse155)
+            QCOW=openSUSE-Leap-15.5.x86_64-NoCloud.qcow2
+            OS_VARIANT="opensuse15.5"
+            IMAGE_URL=https://download.opensuse.org/repositories/Cloud:/Images:/Leap_15.5/images
+            DISK_FORMAT=qcow2
+            LOGIN_USER=opensuse
+            ;;
+        opensuse156)
+            QCOW=openSUSE-Leap-15.6.x86_64-NoCloud.qcow2
+            OS_VARIANT="opensuse15.5"
+            IMAGE_URL=https://download.opensuse.org/repositories/Cloud:/Images:/Leap_15.6/images
+            DISK_FORMAT=qcow2
+            LOGIN_USER=opensuse
+            ;;            
+         rocky93)
+            QCOW=Rocky-9-GenericCloud.latest.x86_64.qcow2
+            OS_VARIANT="rocky9.0"
+            IMAGE_URL=https://dl.rockylinux.org/pub/rocky/9/images/x86_64
+            DISK_FORMAT=qcow2
+            LOGIN_USER=rocky
+            ;;
+        rhel79)
+            QCOW=rhel-server-7.9-update-12-x86_64-kvm.qcow2
+            OS_VARIANT="rhel7.9"
+            IMAGE_URL="${LOCALURL}" # Manual download
+            DISK_FORMAT=qcow2
+            LOGIN_USER=rhel
+            ;;
+        rhel89)
+            QCOW=rhel-8.9-x86_64-kvm.qcow2
+            OS_VARIANT="rhel8.9"
+            IMAGE_URL="${LOCALURL}" # Manual download
+            DISK_FORMAT=qcow2
+            LOGIN_USER=rhel
+            ;;
+        micro6)
+            QCOW=SL-Micro.x86_64-6.0-Base-qcow-GM.qcow2
+            OS_VARIANT="slem5.5"
+            IMAGE_URL="${LOCALURL}" # Manual download
+            DISK_FORMAT=qcow2
+            LOGIN_USER=sles
+            ;;            
+        sles152)
+            QCOW=SLES15-SP2-JeOS.x86_64-15.2-OpenStack-Cloud-GM.qcow2
+            OS_VARIANT="sle15sp2"
+            IMAGE_URL="${LOCALURL}"  # Manual download
+            DISK_FORMAT=qcow2
+            LOGIN_USER=sles
+            ;;
+        sles153)
+            QCOW=SLES15-SP3-JeOS.x86_64-15.3-OpenStack-Cloud-GM.qcow2
+            OS_VARIANT="sle15sp3"
+            IMAGE_URL="${LOCALURL}" # Manual download
+            DISK_FORMAT=qcow2
+            LOGIN_USER=sles
+            ;;
+        sles154)
+            QCOW=SLES15-SP4-Minimal-VM.x86_64-OpenStack-Cloud-GM.qcow2
+            OS_VARIANT="sle15sp4"
+            IMAGE_URL="${LOCALURL}"  # Manual download
+            DISK_FORMAT=qcow2
+            LOGIN_USER=sles
+            ;;
+        sles155)
+            QCOW=SLES15-SP5-Minimal-VM.x86_64-Cloud-GM.qcow2
+            OS_VARIANT="sle15sp5"
+            IMAGE_URL="${LOCALURL}"  # Manual download
+            DISK_FORMAT=qcow2
+            LOGIN_USER=sles
+            ;;
+        sles155qu1)
+            QCOW=SLES15-SP5-Minimal-VM.x86_64-Cloud-QU1.qcow2
+            OS_VARIANT="sle15sp5"
+            IMAGE_URL="${LOCALURL}" # Manual download
+            DISK_FORMAT=qcow2
+            LOGIN_USER=sles
+            ;;      
+        sles156)
+            QCOW=SLES15-SP6-Minimal-VM.x86_64-Cloud-GM.qcow2
+            OS_VARIANT="sle15sp6"
+            IMAGE_URL="${LOCALURL}"  # Manual download
+            DISK_FORMAT=qcow2
+            LOGIN_USER=sles
+            ;;            
+        ubuntu1804)
+            QCOW=ubuntu-18.04-server-cloudimg-amd64.img
+            OS_VARIANT="ubuntu18.04"
+            IMAGE_URL=https://cloud-images.ubuntu.com/releases/18.04/release
+            DISK_FORMAT=qcow2
+            LOGIN_USER=ubuntu
+            ;;
+        ubuntu2004)
+            QCOW=ubuntu-20.04-server-cloudimg-amd64.img
+            OS_VARIANT="ubuntu20.04"
+            IMAGE_URL=https://cloud-images.ubuntu.com/releases/20.04/release
+            DISK_FORMAT=qcow2
+            LOGIN_USER=ubuntu
+            ;;
+        ubuntu2204)
+            QCOW=ubuntu-22.04-server-cloudimg-amd64.img
+            OS_VARIANT="ubuntu22.04"
+            IMAGE_URL=https://cloud-images.ubuntu.com/releases/22.04/release
+            DISK_FORMAT=qcow2
+            LOGIN_USER=ubuntu
+            ;;  
+        *)
+            die "${DISTRO} not a supported OS.  Run 'kvm-install-vm create help'."
+            ;;
+    esac
+
+    IMAGE=${IMAGEDIR}/${QCOW}
+
+    if [ ! -f "${IMAGEDIR}"/"${QCOW}" ]
+    then
+        set_wget
+        if [ -f "${IMAGEDIR}"/"${QCOW}".part ]
+        then
+            CONTINUE="--continue"
+            output "Partial cloud image found.  Resuming download"
+        else
+            CONTINUE=""
+            output "Cloud image not found.  Downloading"
+        fi
+        ${WGET} \
+            ${CONTINUE} \
+            --directory-prefix "${IMAGEDIR}" \
+            --output-document="${IMAGEDIR}"/"${QCOW}".part \
+            "${IMAGE_URL}"/"${QCOW}" || \
+            die "Could not download image."
+
+        mv "${IMAGEDIR}"/"${QCOW}".part "${IMAGEDIR}"/"${QCOW}"
+    fi
+
+}
+
+function create_vm ()
+{
+    # Create image directory if it doesn't already exist
+    mkdir -p "${VMDIR}"
+
+    check_vmname_set
+
+    # Start clean
+    [ -d "${VMDIR}/${VMNAME}" ] && rm -rf "${VMDIR}"/"${VMNAME}"
+    mkdir -p "${VMDIR}"/"${VMNAME}"
+
+    pushd "${VMDIR}"/"${VMNAME}"
+
+    # Create log file
+    touch "${VMNAME}".log
+
+    # cloud-init config: set hostname, remove cloud-init package,
+    # and add ssh-key
+    cat > "$USER_DATA" << _EOF_
+Content-Type: multipart/mixed; boundary="==BOUNDARY=="
+MIME-Version: 1.0
+--==BOUNDARY==
+Content-Type: text/cloud-config; charset="us-ascii"
+
+#cloud-config
+
+# Hostname management
+preserve_hostname: False
+hostname: ${VMNAME}
+fqdn: ${VMNAME}.${DNSDOMAIN}
+
+# Allow login as root with password
+ssh_pwauth: true
+disable_root: false
+chpasswd:
+  users:
+    - name: root
+      password: password
+      type: text
+    - name: ${LOGIN_USER}
+      password: password
+      type: text
+  expire: false
+
+# Install qemu guest agent package
+packages:
+  - qemu-guest-agent
+
+# Users
+users:
+    - default
+    - name: ${LOGIN_USER}
+      groups: ['${SUDOGROUP}']
+      shell: /bin/bash
+      sudo: ALL=(ALL) NOPASSWD:ALL
+      lock_passwd: false
+      ssh_authorized_keys:
+        - ${KEY}
+
+# Configure where output will go
+output:
+  all: ">> /var/log/cloud-init.log"
+
+# configure interaction with ssh server
+ssh_genkeytypes: ['ed25519', 'rsa']
+
+# Install my public ssh key to the first user-defined user configured
+# in cloud.cfg in the template (which is centos for CentOS cloud images)
+ssh_authorized_keys:
+  - ${KEY}
+
+timezone: ${TIMEZONE}
+
+# Remove cloud-init when finished with it
+runcmd:
+  - ${NETRESTART}
+  - sudo systemctl start qemu-guest-agent
+#  - ${CLOUDINITDISABLE}
+_EOF_
+
+    if [ ! -z "${SCRIPTNAME+x}" ]
+    then
+        SCRIPT=$(< "$SCRIPTNAME")
+        cat >> "$USER_DATA" << _EOF_
+
+--==BOUNDARY==
+Content-Type: text/x-shellscript; charset="us-ascii"
+${SCRIPT}
+
+--==BOUNDARY==--
+_EOF_
+    else
+        cat >> "$USER_DATA" << _EOF_
+
+--==BOUNDARY==--
+_EOF_
+    fi
+
+    { echo "instance-id: ${VMNAME}"; echo "local-hostname: ${VMNAME}"; } > "$META_DATA"
+
+    set_network_intf_name
+
+    # If NET_IP is set configure static network using cloud-init, otherwise use dhcp
+    if [ ! -z "${NET_IP}" ] && [ ! -z "${NET_GW}" ] && [ ! -z "${NET_DNS}"  ]
+    then
+        cat > "${NETWORK_DATA}" << _EOF_
+version: 2
+ethernets:
+  ${NET_INTF}:
+    dhcp4: false
+    addresses:
+      - ${NET_IP}
+    gateway4: ${NET_GW}
+    nameservers:
+      search: ['${DNSDOMAIN}']
+      addresses: ['${NET_DNS}']
+_EOF_
+
+    else
+        cat > "${NETWORK_DATA}" << _EOF_
+version: 2
+ethernets:
+  ${NET_INTF}:
+    dhcp4: true
+_EOF_
+
+    fi
+
+    outputn "Copying cloud image ($(basename "${IMAGE}"))"
+    DISK=${VMNAME}.qcow2
+    qemu-img create -q -f qcow2 -F qcow2 -b "$IMAGE" "$DISK" && ok
+    if ${RESIZE_DISK}
+    then
+        outputn "Resizing the disk to ${DISK_SIZE} GB"
+        # Workaround to prevent virt-resize from renumbering partitions and breaking grub
+        # See https://bugzilla.redhat.com/show_bug.cgi?id=1472039
+        # Ubuntu will automatically grow the partition to the new size on its first boot
+        case "${DISTRO}" in
+            ubuntu*|debian*|rocky*)
+                qemu-img resize "${DISK}" "${DISK_SIZE}"G &>> "${VMNAME}".log \
+                    && ok \
+                    || die "Could not resize disk."
+                ;;
+            opensuse*|sles*|rhel8*)
+                qemu-img create -f qcow2 \
+                    -o preallocation=metadata "${DISK}".new "${DISK_SIZE}"G &>> "${VMNAME}".log \
+                    && virt-resize --quiet --expand /dev/sda3 "${DISK}" "${DISK}".new &>> "${VMNAME}".log \
+                    && (mv "${DISK}".new "${DISK}" && ok) \
+                    || die "Could not resize disk."
+                ;;
+            fedora*)
+                qemu-img create -f qcow2 \
+                    -o preallocation=metadata "${DISK}".new "${DISK_SIZE}"G &>> "${VMNAME}".log \
+                    && virt-resize --quiet --expand /dev/sda5 "${DISK}" "${DISK}".new &>> "${VMNAME}".log \
+                    && (mv "${DISK}".new "${DISK}" && ok) \
+                    || die "Could not resize disk."
+                ;;
+            micro*)
+                if [ "$DISK_SIZE" -lt 32 ]; then
+                  echo "Disk is already over ${DISK_SIZE}, not resizing"
+                else
+                  qemu-img create -f qcow2 \
+                      -o preallocation=metadata "${DISK}".new "${DISK_SIZE}"G &>> "${VMNAME}".log \
+                      && virt-resize --quiet --expand /dev/sda3 "${DISK}" "${DISK}".new &>> "${VMNAME}".log \
+                      && (mv "${DISK}".new "${DISK}" && ok) \
+                      || die "Could not resize disk."
+                fi
+                ;;
+            *)
+                qemu-img create -f qcow2 \
+                    -o preallocation=metadata "${DISK}".new "${DISK_SIZE}"G &>> "${VMNAME}".log \
+                    && virt-resize --quiet --expand /dev/sda1 "${DISK}" "${DISK}".new &>> "${VMNAME}".log \
+                    && (mv "${DISK}".new "${DISK}" && ok) \
+                    || die "Could not resize disk."
+                ;;
+        esac
+    fi
+
+    # Create CD-ROM ISO with cloud-init config
+    outputn "Generating ISO for cloud-init"
+    if command -v mkisofs &>/dev/null
+    then
+        mkisofs -output "${CI_ISO}" \
+            -volid cidata \
+            -joliet -r "${USER_DATA}" "${META_DATA}" "${NETWORK_DATA}" &>> "${VMNAME}".log \
+            && ok \
+            || die "Could not generate ISO."
+    else
+        die "Could not find mkisofs."
+    fi
+
+    # Create new storage pool for new VM
+    run "Creating storage pool" \
+        virsh pool-create-as \
+        --name="${VMNAME}" \
+        --type=dir \
+        --target="${VMDIR}"/"${VMNAME}" \
+        || die "Could not create storage pool."
+
+    # Add custom MAC Address if specified
+    NETWORK_PARAMS="$(join ',' \
+        $(param bridge "${BRIDGE}") \
+        $(param model "${NETWORK_MODEL}") \
+        $(param mac "${MACADDRESS}") \
+        ${NETWORK_EXTRA})"
+
+    # Assemble disk parameters.
+    DISK_PARAMS="$(join ',' \
+        "${DISK}" \
+        $(param format "${DISK_FORMAT}") \
+        $(param bus "${DISK_BUS}") \
+	    $(param size "${DISK_SIZE}") \
+        ${DISK_EXTRA})"
+
+    # Assemble CI ISO disk parameters.
+    CI_ISO_PARAMS="$(join ',' \
+        "${CI_ISO}" \
+	    $(param device "${CI_DEVICE}") \
+        ${CI_ISO_EXTRA})"
+
+    # Omit the --graphics option to auto-detect.
+    if [ "${GRAPHICS}" = 'auto' ]
+    then
+        GRAPHICS_PARAMS=""
+    else
+        GRAPHICS_PARAMS="$(join ',' \
+            "${GRAPHICS}" \
+            $(param port "${PORT}") \
+            $(param listen "${GRAPHICS_LISTEN}") \
+            ${GRAPHICS_EXTRA})"
+    fi
+
+    # Assemble virt-install options.
+    NETWORK_OPTION="$(param --network "${NETWORK_PARAMS}")"
+    DISK_OPTION="$(param --disk "${DISK_PARAMS}")"
+    CI_ISO_OPTION="$(param --disk "${CI_ISO_PARAMS}")"
+    GRAPHICS_OPTION="$(param --graphics "${GRAPHICS_PARAMS}")"
+
+    # Call virt-install to import the cloud image and create a new VM
+    run "Installing the domain" \
+        virt-install --import \
+        --name="${VMNAME}" \
+        --memory="${MEMORY}" \
+        --vcpus="${CPUS}" \
+        --cpu="${FEATURE}" \
+        ${DISK_OPTION} \
+        ${CI_ISO_OPTION} \
+        ${NETWORK_OPTION} \
+        --os-variant="${OS_VARIANT}" \
+        --noautoconsole \
+        ${GRAPHICS_OPTION} \
+        ${VIRT_INSTALL_EXTRA} \
+        || die "Could not create domain with virt-install."
+
+    virsh dominfo "${VMNAME}" &>> "${VMNAME}".log
+
+    # Enable autostart if true
+    if ${AUTOSTART}
+    then
+        outputn "Enabling autostart"
+        virsh autostart \
+            --domain "${VMNAME}" > /dev/null 2>&1 \
+            && ok \
+            || die "Could not enable autostart."
+    fi
+
+    MAC=$(virsh dumpxml "${VMNAME}" | awk -F\' '/mac address/ {print $2}')
+    output "MAC address: ${MAC}"
+
+    TIMEOUT=120
+    START_TIME=$(date +%s)
+    if [ -f "/var/lib/libvirt/dnsmasq/${BRIDGE}.status" ]
+    then
+        outputn "Waiting for domain to get an IP address"
+        while true
+        do
+            IP=$(grep -B1 "${MAC}" /var/lib/libvirt/dnsmasq/"${BRIDGE}".status | head \
+                -n 1 | awk '{print $2}' | sed -e s/\"//g -e s/,//)
+            if [ "${IP}" = "" ]
+            then
+                sleep 1
+            else
+                ok
+                break
+            fi
+        done
+        printf "\n"
+        check_delete_known_host
+    else
+        while [[ $(virsh guestinfo "${VMNAME}" 2>&1) == *"error: Guest agent is not responding"* ]]
+        do
+            CURRENT_TIME=$(date +%s)
+            ELAPSED_TIME=$((CURRENT_TIME - START_TIME))
+            if [[ ${ELAPSED_TIME} -ge ${TIMEOUT} ]]; then
+                echo "Timeout reached. QEMU agent not responding."
+                break
+            fi
+            sleep  10
+        done
+
+        sleep 60        # Wait for IP address
+        IP=$(virsh guestinfo "${VMNAME}" --interface |awk -F': ' '/if.1.addr.0.addr/{print $2};')
+
+        if [ "${IP}" = "" ]
+        then
+            output "Error getting IP address. Check your DHCP server or VM console"
+        else
+            output "IP address: ${IP}"
+            check_delete_known_host
+        fi
+    fi
+
+    echo "==============================================================================="
+    output "SSH to ${VMNAME}: 'ssh ${LOGIN_USER}@${IP}' or 'ssh ${LOGIN_USER}@${VMNAME}'"
+    echo "==============================================================================="
+    CONSOLE=$(virsh domdisplay "${VMNAME}")
+    # Workaround because VNC port number shown by virsh domdisplay is offset from 5900
+    if [ "${GRAPHICS}" = 'vnc' ]
+    then
+        CONSOLE_NO_PORT=$(echo "${CONSOLE}" | cut -d ':' -f 1,2 -)
+        CONSOLE_PORT=$(expr 5900 + $(echo "${CONSOLE}" | cut -d ':' -f 3 -))
+        output "Console at ${CONSOLE_NO_PORT}:${CONSOLE_PORT}"
+    else
+        output "Console at ${CONSOLE}"
+    fi
+    
+    # Eject cdrom
+    # virsh detach-disk --domain "${VMNAME}" "${VMDIR}"/"${VMNAME}"/"${CI_ISO}" --config &>> "${VMNAME}".log
+
+    # Remove the unnecessary cloud init files
+    # outputn "Cleaning up cloud-init files"
+    # rm -f "${USER_DATA}" "${META_DATA}" "${NETWORK_DATA}" "${CI_ISO}" && ok
+
+    popd
+}
+
+function remove ()
+{
+    while getopts ":l:L:hv" opt
+    do
+        case "$opt" in
+            l ) IMAGEDIR="${OPTARG}" ;;
+            L ) VMDIR="${OPTARG}" ;;
+            v ) VERBOSE=1 ;;
+            h ) usage ;;
+            * ) die "Unsupported option. Run 'kvm-install-vm help remove'." ;;
+        esac
+    done
+
+    shift $((OPTIND - 1))
+
+    if [ "$#" != 1 ]
+    then
+        printf "Please specify a single host to remove.\n"
+        printf "Run 'kvm-install-vm help remove' for usage.\n"
+        exit 1
+    else
+        VMNAME=$1
+    fi
+
+    delete_vm
+}
+
+function create ()
+{
+    # Parse command line arguments
+    while getopts ":b:c:d:D:f:g:G:i:I:k:l:L:m:M:p:R:s:t:T:u:ahynv" opt
+    do
+        case "$opt" in
+            a ) AUTOSTART=${OPTARG} ;;
+            b ) BRIDGE="${OPTARG}" ;;
+            c ) CPUS="${OPTARG}" ;;
+            d ) DISK_SIZE="${OPTARG}" ;;
+            D ) DNSDOMAIN="${OPTARG}" ;;
+            f ) FEATURE="${OPTARG}" ;;
+            g ) GRAPHICS="${OPTARG}" ;;
+            G ) NET_GW="${OPTARG}" ;;
+            i ) IMAGE="${OPTARG}" ;;
+            I ) NET_IP="${OPTARG}" ;;
+            k ) PUBKEY="${OPTARG}" ;;
+            l ) IMAGEDIR="${OPTARG}" ;;
+            L ) VMDIR="${OPTARG}" ;;
+            m ) MEMORY="${OPTARG}" ;;
+            M ) MACADDRESS="${OPTARG}" ;;
+            p ) PORT="${OPTARG}" ;;
+            R ) NET_DNS="${OPTARG}" ;;
+            s ) SCRIPTNAME="${OPTARG}" ;;
+            t ) DISTRO="${OPTARG}" ;;
+            T ) TIMEZONE="${OPTARG}" ;;
+            u ) ADDITIONAL_USER="${OPTARG}" ;;
+            y ) ASSUME_YES=1 ;;
+            n ) ASSUME_NO=1 ;;
+            v ) VERBOSE=1 ;;
+            h ) usage ;;
+            * ) die "Unsupported option. Run 'kvm-install-vm help create'." ;;
+        esac
+    done
+
+    shift $((OPTIND - 1))
+
+    # Resize disk if you specify a disk size either via cmdline option or .kivrc
+    if [ -n "${DISK_SIZE}" ]
+    then
+        RESIZE_DISK=true
+    fi
+
+    # Yes (-y) and No (-n) are mutually exclusive.
+    if [[ "${ASSUME_YES}" -eq 1 ]] && [[ "${ASSUME_NO}" -eq 1 ]]
+    then
+        printf "Please specify only one of -y or -n flags.\n"
+        exit 1
+    fi
+
+    # After all options are processed, make sure only one variable is left (vmname)
+    if [ "$#" != 1 ]
+    then
+        printf "Please specify a single host to create.\n"
+        printf "Run 'kvm-install-vm help create' for usage.\n"
+        exit 1
+    else
+        VMNAME=$1
+    fi
+
+    # Set cloud-init variables after VMNAME is assigned
+    USER_DATA=user-data
+    META_DATA=meta-data
+    NETWORK_DATA=network-config
+    CI_ISO=${VMNAME}-cidata.iso
+    CI_DEVICE="cdrom"
+
+    # Check for ssh key
+    check_ssh_key
+
+    if [ ! -z "${IMAGE+x}" ]
+    then
+        output "Using custom QCOW2 image: ${IMAGE}."
+        OS_VARIANT="auto"
+        LOGIN_USER="<use the default account in your custom image>"
+    else
+        fetch_images
+    fi
+
+    # Verify the osinfo-db is up to date.
+    check_os_variant
+
+    # Check if domain already exists
+    domain_exists "${VMNAME}"
+
+    if [ "${DOMAIN_EXISTS}" -eq 1 ]; then
+        echo -n "[WARNING] ${VMNAME} already exists.  Do you want to overwrite ${VMNAME} [y/N]? "
+        if [ "${ASSUME_YES}" -eq 1 ]; then
+            REPLY="y"
+            echo $REPLY
+        elif [ "${ASSUME_NO}" -eq 1 ]; then
+            REPLY="n"
+            echo $REPLY
+        else
+            read -r
+        fi
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            delete_vm
+        else
+            echo -e "\nNot overwriting ${VMNAME}. Exiting..."
+            exit 1
+        fi
+    fi
+
+    # Set cloud init remove command
+    # set_cloud_init_remove
+
+    # Set package manager
+    set_sudo_group
+
+    # Set network restart command
+    set_network_restart_cmd
+
+    # Finally, create requested VM
+    create_vm
+}
+
+function attach-disk ()
+{
+    while getopts ":d:f:s:t:h" opt
+    do
+        case "$opt" in
+            d ) DISKSIZE="${OPTARG}G" ;;
+            f ) DISK_FORMAT="${OPTARG}" ;;
+            s ) SOURCE="${OPTARG}" ;;
+            t ) TARGET="${OPTARG}" ;;
+            h ) usage ;;
+            * ) die "Unsupported option. Run 'kvm-install-vm help attach-disk'." ;;
+        esac
+    done
+
+    shift $((OPTIND - 1))
+
+    [ ! -z "${TARGET}" ] || die "You must specify a target device, for e.g. '-t vdb'"
+    [ ! -z "${DISKSIZE}" ] || die "You must specify a size (in GB) for the new device, for e.g. '-d 5'"
+
+    if [ "$#" != 1 ]
+    then
+        printf "Please specify a single host to attach a disk to.\n"
+        printf "Run 'kvm-install-vm help attach-disk' for usage.\n"
+        exit 1
+    else
+        VMNAME=$1
+
+        [[ -d ${VMDIR}/${VMNAME} ]] && DISKDIR=${VMDIR}/${VMNAME} || DISKDIR=${IMAGEDIR}/${VMNAME}
+        DISKNAME=${VMNAME}-${TARGET}-${DISKSIZE}.${DISK_FORMAT}
+
+        if [ ! -f "${DISKDIR}/${DISKNAME}" ]
+        then
+            outputn "Creating new '${TARGET}' disk image for domain ${VMNAME}"
+            (qemu-img create -f "${DISK_FORMAT}" -o size="$DISKSIZE",preallocation=metadata \
+                "${DISKDIR}"/"${DISKNAME}" &>> "${DISKDIR}"/"${VMNAME}".log  && ok ) && \
+
+            outputn "Attaching ${DISKNAME} to domain ${VMNAME}"
+            (virsh attach-disk "${VMNAME}" \
+                    --source "$DISKDIR"/"${DISKNAME}" \
+                    --target "${TARGET}" \
+                    --subdriver "${DISK_FORMAT}" \
+                    --cache none \
+                    --persistent &>> "${DISKDIR}"/"${VMNAME}".log && ok ) \
+                || die "Could not attach disk."
+        else
+            die "Target ${TARGET} is already created or in use."
+        fi
+    fi
+}
+
+function detach-disk ()
+{
+    while getopts ":s:h" opt
+    do
+        case "$opt" in
+            s ) DISKNAME="${OPTARG}" ;;
+            h ) usage ;;
+            * ) die "Unsupported option. Run 'kvm-install-vm help attach-disk'." ;;
+        esac
+    done
+
+    shift $((OPTIND - 1))
+
+    [ ! -z "${DISKNAME}" ] || die "You must specify a disk source to detach, for e.g. ${VMNAME}-vdb-5G.qcow2'"
+
+    if [ "$#" != 1 ]
+    then
+        printf "Please specify a single host to detach a disk from.\n"
+        printf "Run 'kvm-install-vm help detach-disk' for usage.\n"
+        exit 1
+    else
+
+        VMNAME=$1
+
+        if [ -f "${VMDIR}/${VMNAME}/${DISKNAME}" ]
+        then
+            outputn "Detaching ${DISKNAME} from domain ${VMNAME}"
+            (virsh detach-disk --domain "${VMNAME}" \
+                "${VMDIR}"/"${VMNAME}"/"${DISKNAME}" --config &>> "${DISKDIR}"/"${VMNAME}".log && ok ) \
+                || die "Could not detach disk."
+        else
+            die "Target ${TARGET} is already detached or in use."
+        fi
+    fi
+
+}
+
+function attach-nvme ()
+{
+    while getopts ":d:f:h" opt
+    do
+        case "$opt" in
+            d ) DISKSIZE="${OPTARG}G" ;;
+            f ) DISK_FORMAT="${OPTARG}" ;;
+            h ) usage ;;
+            * ) die "Unsupported option. Run 'kvm-install-vm help attach-nvme'." ;;
+        esac
+    done
+
+    shift $((OPTIND - 1))
+
+    [ ! -z "${DISKSIZE}" ] || die "You must specify a size (in GB) for the new device, for e.g. '-d 5'"
+
+    if [ "$#" != 1 ]
+    then
+        printf "Please specify a single host to attach a NVMe disk to.\n"
+        printf "Run 'kvm-install-vm help attach-nvme' for usage.\n"
+        exit 1
+    else
+        VMNAME=$1
+
+        # Check if addr 03.6 and 03.7 exist
+        ADDR=$(virsh dumpxml "${VMNAME}" | grep -oP "<qemu:arg value='nvme[^>]*addr=\K03.[67]")
+        if [[ $(echo "$ADDR" | wc -l) -eq 2 ]]; then
+            die "All addresses occcupied, cannot attach nvme."
+            exit 1
+        elif [[ $(echo "$ADDR" | wc -l) -eq 1 && $ADDR == "03.6" ]]; then
+            NVMEDRV="NVME2"
+            ADDR="03.7"
+            NVMESN="nvme-2"
+        else
+            NVMEDRV="NVME1"
+            ADDR="03.6"
+            NVMESN="nvme-1"
+        fi
+
+        [[ -d ${VMDIR}/${VMNAME} ]] && DISKDIR=${VMDIR}/${VMNAME} || DISKDIR=${IMAGEDIR}/${VMNAME}
+        DISKNAME=${VMNAME}-nvme-${DISKSIZE}.${DISK_FORMAT}
+
+        if [ ! -f "${DISKDIR}/${DISKNAME}" ]
+        then
+            outputn "Creating new NVMe disk image for domain ${VMNAME}"
+            (qemu-img create -f "${DISK_FORMAT}" -o size="$DISKSIZE",preallocation=metadata \
+                "${DISKDIR}"/"${DISKNAME}" &>> "${VMDIR}"/"${VMNAME}".log && ok ) && \
+
+            outputn "Attaching ${DISKNAME} to domain ${VMNAME}"
+            (virt-xml "${VMNAME}" --edit --qemu-commandline="-drive file=${DISKDIR}/${DISKNAME},format=${DISK_FORMAT},if=none,id=${NVMEDRV}" &>> "${VMDIR}"/"${VMNAME}".log && \
+                virt-xml "${VMNAME}" --edit --qemu-commandline="-device nvme,drive=${NVMEDRV},serial=${NVMESN},addr=${ADDR}" &>> "${VMDIR}"/"${VMNAME}".log && ok ) \
+
+            outputn "Rebooting domain ${VMNAME}"
+            (virsh shutdown "${VMNAME}" &>> "${VMDIR}"/"${VMNAME}".log && \
+                    # Wait for the VM to shut down
+                while true; do
+                    VM_STATE=$(virsh domstate "${VMNAME}")
+                    if [ "$VM_STATE" == "shut off" ]; then
+                        break
+                    fi
+                    sleep 1
+                done && \
+                virsh start "${VMNAME}" &>> "${VMDIR}"/"${VMNAME}".log && ok ) \
+                || die "Could not attach disk."
+        else
+            die "Target NVMe disk is already created or in use."
+        fi
+    fi
+}
+
+function attach-nic ()
+{
+    while getopts ":m:b:h" opt
+    do
+        case "$opt" in
+            m ) NETWORK_MODEL="${OPTARG}" ;;
+            b ) BRIDGE="${OPTARG}" ;;
+            h ) usage ;;
+            * ) die "Unsupported option. Run 'kvm-install-vm help attach-nic'." ;;
+        esac
+    done
+
+    shift $((OPTIND - 1))
+
+    if [ "$#" != 1 ]
+    then
+        printf "Please specify a single host to attach an interface to.\n"
+        printf "Run 'kvm-install-vm help attach-nic' for usage.\n"
+        exit 1
+    else
+        VMNAME=$1
+        outputn "Attaching new interface to domain ${VMNAME}"
+        (virsh attach-interface "${VMNAME}" \
+                --type bridge \
+                --model "${NETWORK_MODEL}" \
+                --source "${BRIDGE}" \
+                --config \
+                --live &>> "${DISKDIR}"/"${VMNAME}".log && ok ) \
+            || die "Could not attach interface."
+    fi
+}
+
+#--------------------------------------------------
+# Main
+#--------------------------------------------------
+
+subcommand="${1:-none}"
+[[ "${subcommand}" != "none" ]] && shift
+
+case "${subcommand}" in
+    none)
+        usage
+        ;;
+    help)
+        if [[ "${1:-none}" == "none" ]]; then
+            usage
+        elif [[ "$1" =~ ^create$|^remove$|^list$|^attach-disk$|^detach-disk$|^attach-nvme$|^attach-nic$ ]]; then
+            usage_subcommand "$1"
+        else
+            printf "'$1' is not a valid subcommand.\n\n"
+            usage
+        fi
+        ;;
+    list)
+        virsh list --all
+        exit 0
+        ;;
+    create|remove|attach-disk|detach-disk|attach-nvme|attach-nic)
+        if [[ "${1:-none}" == "none" ]]; then
+            usage_subcommand "${subcommand}"
+        elif [[ "$1" =~ ^help$ ]]; then
+            usage_subcommand "${subcommand}"
+        else
+            set_defaults
+            set_custom_defaults
+            "${subcommand}" "$@"
+            exit $?
+        fi
+        ;;
+    *)
+        die "'${subcommand}' is not a valid subcommand.  See 'kvm-install-vm help' for a list of subcommands."
+        ;;
+esac

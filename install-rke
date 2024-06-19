@@ -1,0 +1,308 @@
+#!/bin/bash
+set -e
+
+prog=${0##*/}
+source $(dirname "$(readlink -f "$0")")/functions.sh
+
+function usage ()
+{
+    cat << EOF
+NAME
+    install-rke - Install rke node on a VM.
+
+SYNOPSIS
+    $prog COMMAND [OPTIONS]
+
+DESCRIPTION
+    A bash script to install and remove RKE nodes. The aim is to simplify
+    the installation and make the deployments scriptable.
+
+COMMANDS
+    create      - create a new RKE node
+    remove      - delete a RKE node
+    help        - show this help or help for a subcommand
+EOF
+    exit 0
+}
+
+function usage_subcommand ()
+{
+    case "$1" in
+        create)
+            printf "NAME\n"
+            printf "    $prog create [COMMANDS] [OPTIONS] HOST\n"
+            printf "\n"
+            printf "DESCRIPTION\n"
+            printf "    Create a new RKE node.\n"
+            printf "\n"
+            printf "COMMANDS\n"
+            printf "    help - show this help\n"
+            printf "\n"
+            printf "OPTIONS\n"
+            printf "    -c          CNI Plugin            (default: canal)\n"
+            printf "    -h          Display help\n"
+            printf "    -k          SSH Private Key       (default: $HOME/.ssh/id_rsa)\n"
+            printf "    -s          Service type          (default: server)\n"
+            printf "    -S          Server to connect to  (default: none)\n"
+            printf "    -u          SSH user              (default: sles)\n"
+            printf "    -V          Kubernetes Version    (default: none)\n"
+            printf "\n"
+            printf "EXAMPLES\n"
+            printf "    $prog create 192.168.200.201\n"
+            printf "        Create a new RKE server node on the host 192.168.200.201 with default settings.\n"
+            printf "\n"
+            printf "    $prog create -c calico -s worker -S 192.169.200.201 192.168.200.202\n"
+            printf "        Create a new RKE worker node that connects to the existing server node 192.168.200.201.\n"
+            printf "        Use CNI plugin calico. Host machine is 192.168.200.202.\n"
+            printf "\n"
+            printf "    $prog create -V v1.3.0 -u ubuntu 192.168.200.204\n"
+            printf "        Create a RKE server node with RKE version v1.3.0. Use \"ubuntu\" as user for ssh.\n"
+            printf "\n"
+            ;;
+        remove)
+            printf "NAME\n"
+            printf "    $prog remove [COMMANDS] HOST\n"
+            printf "\n"
+            printf "DESCRIPTION\n"
+            printf "    Uninstalls RKE completely from specified host.\n"
+            printf "\n"
+            printf "COMMANDS\n"
+            printf "    help - show this help\n"
+            printf "\n"
+            printf "OPTIONS\n"
+            printf "    -h          Display help\n"
+            printf "    -k          SSH Private Key       (default: $HOME/.ssh/id_rsa)\n"
+            printf "    -u          SSH user              (default: sles)\n"
+            printf "\n"
+            printf "EXAMPLE\n"
+            printf "    $prog remove -u sles 192.168.200.201\n"
+            printf "        Remove RKE from host 192.168.200.201. Use \"sles\" as user for ssh.\n"
+            printf "        When removing master node make sure to preserve cluster.yml,\n"
+            printf "        kube_config_cluster.yml and cluster.rkestate files.\n"
+            ;;
+        *)
+            printf "'$subcommand' is not a valid subcommand.\n"
+            exit 1
+            ;;
+    esac
+    exit 0
+}
+
+function prepare_ssh_payload() {
+
+    # Create the payload
+    cat <<EOF
+### Detect OS and install docker
+if [ -f /etc/os-release ]; then
+    OS_NAME=\$(grep "^NAME=" /etc/os-release | cut -d \" -f 2)
+    OS_VERSION=\$(grep "^VERSION_ID=" /etc/os-release | cut -d \" -f 2)
+    case "\${OS_NAME}" in
+        SLES*)
+            echo "- The operating system is SLES."
+            echo "- Registering system to ${RMT}"
+            sudo SUSEConnect --url ${RMT}
+            if [ \$? -eq 0 ]; then
+              sudo SUSEConnect -p sle-module-containers/\${OS_VERSION}/x86_64
+              echo "- Installing Docker.."
+              sudo zypper -n install docker iptables
+              sudo systemctl enable docker.service
+              sudo systemctl start docker.service
+              sudo usermod -aG docker ${LOGIN_USER}
+             else
+              echo "Failed to register SLES with the RMT server." 
+              exit 1
+            fi 
+            ;;
+        openSUSE*)
+            echo "- The operating system is openSUSE."
+            echo "- Installing docker..." 
+            sudo zypper -n refresh
+            sudo zypper -n install docker
+            sudo systemctl enable docker.service
+            sudo systemctl start docker.service
+            sudo usermod -aG docker ${LOGIN_USER}
+            ;;
+        Ubuntu*|Debian*)
+            echo "- The operating system is ubuntu/debian."
+            echo "- Installing docker..." 
+            sudo DEBIAN_FRONTEND=noninteractive apt install -y docker.io 
+#            sudo systemctl enable docker.service
+#            sudo systemctl start docker.service
+            sudo usermod -aG docker ${LOGIN_USER}
+            sleep 5
+            ;;    
+        *)
+	    echo "The operating system is not supported (yet)."
+            exit 1
+            ;;
+    esac
+else
+    echo "The /etc/os-release file does not exist. Cannot determine the OS type. Exiting..."
+    exit 1
+fi
+
+echo
+echo "- Downloading RKE version ${VERSION}..."
+wget https://github.com/rancher/rke/releases/download/${VERSION}/rke_linux-amd64
+if [ \$? -ne 0 ]; then
+    echo "Failed to download RKE binary"
+    exit 1
+fi
+
+chmod +x rke_linux-amd64
+sudo mv rke_linux-amd64 /usr/local/bin/rke
+
+if [ ! -z "${SERVER}" ]; then
+   echo
+   echo "- Adding node to the cluster configuration file..."
+   scp -o StrictHostKeyChecking=no ${LOGIN_USER}@${SERVER}:cluster.rkestate ${LOGIN_USER}@${SERVER}:cluster.yml ${LOGIN_USER}@${SERVER}:kube_config_cluster.yml .
+   NODE_CONFIG="- address: ${VMNAME}\n    user: ${LOGIN_USER}\n    role: ${ROLE}"
+   sed -i "/^nodes:/a \ \ \$NODE_CONFIG" cluster.yml
+else
+  echo
+  echo "- Creating cluster configuration file..."
+  sudo tee cluster.yml > /dev/null << 'INNER_EOF'
+nodes:
+  - address: ${VMNAME}
+    user: ${LOGIN_USER}
+    role: ${ROLE}
+network:
+  plugin: ${CNI}
+INNER_EOF
+fi
+
+echo
+echo "- Deploying Kubernetes cluster with RKE..."
+rke up --config ./cluster.yml
+
+if [ \$? -eq 0 ]; then
+    echo "Kubernetes cluster deployment is successful"
+else
+    echo "Failed to deploy Kubernetes cluster"
+    exit 1
+fi
+
+echo
+echo "- Setting up kubectl to use the new cluster..."
+mkdir -p .kube
+cp kube_config_cluster.yml .kube/config
+
+curl -LO "https://dl.k8s.io/release/\$(curl -L -s \
+https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
+
+echo
+echo "- Verifying the cluster..."
+kubectl get nodes
+EOF
+}
+
+
+function remove ()
+{
+    while getopts ":k:u:h" opt
+    do
+        case "$opt" in
+            k ) PRIVKEY="${OPTARG}" ;;
+            u ) LOGIN_USER="${OPTARG}" ;;
+            h ) usage ;;
+            * ) die "Unsupported option. Run 'install-rke help remove'." ;;
+        esac
+    done
+
+    shift $((OPTIND - 1))
+
+    if [ "$#" != 1 ]
+    then
+        printf "Please specify a single host to remove.\n"
+        printf "Run 'install-rke help remove' for usage.\n"
+        exit 1
+    else
+        VMNAME=$1
+    fi
+
+    ssh -o StrictHostKeyChecking=no -i "${PRIVKEY}" "${USER}"@"${VMNAME}" 'rke remove'
+}
+
+function create ()
+{
+    while getopts ":c:k:s:S:u:V:h" opt
+    do
+        case "$opt" in
+            c ) CNI="${OPTARG}" ;;
+            k ) PRIVKEY="${OPTARG}" ;;
+            s ) SRVTYPE="${OPTARG}" ;;
+            S ) SERVER="${OPTARG}" ;;
+            u ) LOGIN_USER="${OPTARG}" ;;
+            V ) VERSION="${OPTARG}" ;;
+            h ) usage ;;
+            * ) die "Unsupported option. Run 'install-rke help create'." ;;
+        esac
+    done
+
+    shift $((OPTIND - 1))
+
+    # After all options are processed, make sure only one variable is left (vmname)
+    if [ "$#" != 1 ]
+    then
+        printf "Please specify a single host to create.\n"
+        printf "Run 'install-rke help create' for usage.\n"
+        exit 1
+    else
+        VMNAME=$1
+    fi
+
+    echo "- Copying SSH keys to ${VMNAME}..."
+    scp -o StrictHostKeyChecking=no "${PRIVKEY}" "${PRIVKEY}".pub "${LOGIN_USER}"@"${VMNAME}":.ssh/
+
+    if [ -z "${VERSION}" ]; then
+        VERSION="${RKE_VERSION}"
+    fi
+
+    if [ "$SRVTYPE" == "worker" ]; then
+        ROLE="[worker]"
+    else
+        ROLE="[controlplane, worker, etcd]"
+    fi
+   #prepare_ssh_payload
+   ssh -o StrictHostKeyChecking=no -i "${PRIVKEY}" "${LOGIN_USER}"@"${VMNAME}" 2>/dev/null <<< "$(prepare_ssh_payload)"
+}
+
+
+#--------------------------------------------------
+# Main
+#--------------------------------------------------
+
+subcommand="${1:-none}"
+[[ "${subcommand}" != "none" ]] && shift
+
+case "${subcommand}" in
+    none)
+        usage
+        ;;
+    help)
+        if [[ "${1:-none}" == "none" ]]; then
+            usage
+        elif [[ "$1" =~ ^create$|^remove$ ]]; then
+            usage_subcommand "$1"
+        else
+            printf "'$1' is not a valid subcommand.\n\n"
+            usage
+        fi
+        ;;
+    create|remove)
+        if [[ "${1:-none}" == "none" ]]; then
+            usage_subcommand "${subcommand}"
+        elif [[ "$1" =~ ^help$ ]]; then
+            usage_subcommand "${subcommand}"
+        else
+            set_defaults
+            set_custom_defaults
+            "${subcommand}" "$@"
+            exit $?
+        fi
+        ;;
+    *)
+        die "'${subcommand}' is not a valid subcommand.  See 'install-rke help' for a list of subcommands."
+        ;;
+esac

@@ -1,0 +1,50 @@
+recipe_desc: |
+  Example recipe file. Single RKE node.
+  Requirements: CPU: 2, Memory: 4GB, Disk: 20GB
+  Versions: RKE v1.26.15-rancher1-1
+  Network: 192.168.143.1/24 (br-rancher)
+
+default_network: &default_network             
+  gw: 192.168.143.1                           # Default gateway ip address
+  dns: 192.168.200.2                          # DNS resolver ip address
+  bridge: br-rancher                          # VM node bridge
+  domain: example.local                       # Default domain
+  netmask: 24                                 # VM network mask
+
+default_vm: &default_vm                       
+  vcpu: 2                                     # Default vcpu count for a node
+  disk: 20                                    # Default VM root disk size in GB
+  memory: 4096                                # Default VM memory in MB
+
+default_kubernetes: &default_kubernetes       
+  version: v1.5.9                             # RKE version
+  type: rke                                   # Kubernetes type
+  cni: calico                                 # CNI plugin
+  privkey: /root/.ssh/id_rsa                  # Path to ssh key for logging to VM
+
+default_node: &default_node                   
+  distro: opensuse155                         # Image distro name
+  user: opensuse                              # Default user
+
+nodes:                                        
+  - name: node1                               # Node name
+    network:                                  
+      <<: *default_network                    # Alias to default network anchor
+      ip: &node1_ip 192.168.143.10            # Node IP address and anchor
+    vm:                                       
+      <<: *default_vm                         # Alias to default VM anchor
+    kubernetes:                               
+      <<: *default_kubernetes                 # Alias to kubernetes anchor settings
+      servicetype: server                     # Node service type (server, agent)
+    <<: *default_node                         # Alias to default node settings
+    join: false                               # Cluster join (true, false)
+
+kubeconfig:
+  - name: rke_node1                          # Rancher configuration
+    <<: *default_node                        # Include node anchor
+    ip: *node1_ip                            # Alias to Kubernetes node ip
+    file: ~/.kube/kc_192.168.143.10          # Local filename 
+    merge: true                              # Merge kubeconfig
+    context: rke_192.168.143.10              # Kubeconfig context
+    server: 192.168.143.10:6443              # Kubeconfig server/port
+    type: rke1                               # Cluster type

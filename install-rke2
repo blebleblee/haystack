@@ -1,0 +1,324 @@
+#!/bin/bash
+set -e
+
+prog=${0##*/}
+source $(dirname "$(readlink -f "$0")")/functions.sh
+
+function usage ()
+{
+    cat << EOF
+NAME
+    install-rke2 - Install RKE2 node on a VM.
+
+SYNOPSIS
+    $prog COMMAND [OPTIONS]
+
+DESCRIPTION
+    A bash script to install and remove RKE2 nodes. The aim is to simplify
+    the installation and make the deployments scriptable.
+
+COMMANDS
+    create      - create a new RKE2 node
+    remove      - delete a RKE2 node
+    help        - show this help or help for a subcommand
+EOF
+    exit 0
+}
+
+function usage_subcommand ()
+{
+    case "$1" in
+        create)
+            printf "NAME\n"
+            printf "    $prog create [COMMANDS] [OPTIONS] HOST\n"
+            printf "\n"
+            printf "DESCRIPTION\n"
+            printf "    Create a new RKE2 node.\n"
+            printf "\n"
+            printf "COMMANDS\n"
+            printf "    help - show this help\n"
+            printf "\n"
+            printf "OPTIONS\n"
+            printf "    -c          CNI Plugin            (default: canal)\n"
+            printf "    -C          RKE2 Channel          (default: stable)\n"
+            printf "    -d          Debug mode            (default: false)\n"
+            printf "    -h          Display help\n"
+            printf "    -k          SSH Private Key       (default: $HOME/.ssh/id_rsa)\n"
+            printf "    -p          Profile (e.g. \"cis\")\n"
+            printf "    -s          Service type          (default: server)\n"
+            printf "    -S          Server to connect to  (default: none)\n"
+            printf "    -t          TLS-SAN hostname/ip   (default: none)\n"
+            printf "    -T          Token for auth        (default: foo)\n"
+            printf "    -u          SSH user              (default: sles)\n"
+            printf "    -V          RKE2 Version          (default: none)\n"
+            printf "    -x          Containerd SElinux    (default: false)\n"
+            printf "    -w          Write kubeconfig mode (default: 777)\n"
+            printf "\n"
+            printf "EXAMPLES\n"
+            printf "    $prog create 192.168.200.201\n"
+            printf "        Create a new RKE2 server node on host 192.168.200.201 with default settings.\n"
+            printf "\n"
+            printf "    $prog create -c calico -s agent -S 192.169.200.201:9345 -T secret 192.168.200.202\n"
+            printf "        Create a new RKE2 agent node that connects to existing server node 192.168.200.201.\n"
+            printf "        Use token \"secret\" and CNI calico. Host machine is 192.168.200.202.\n"
+            printf "\n"
+            printf "    $prog create -d -C testing -t lb.example.local 192.168.200.203\n"
+            printf "        Create a new RKE2 server node on host 192.168.200.203. Turn on debug information.\n"
+            printf "        Channel \"testing\" will be used and loabalancer FQDN will be added to TLS-SAN.\n"
+            printf "\n"
+            printf "    $prog create -V v1.28.6+rke2r1 -w 600 -u ubuntu 192.168.200.204\n"
+            printf "        Create a new RKE2 server node with version 1.28.6. Write kubeconfig so that only\n"
+            printf "        owner can read and write to it. Use \"ubuntu\" as user for ssh.\n"
+            printf "\n"
+            ;;
+        remove)
+            printf "NAME\n"
+            printf "    $prog remove [COMMANDS] HOST\n"
+            printf "\n"
+            printf "DESCRIPTION\n"
+            printf "    Uninstalls RKE2 completely from specified host.\n"
+            printf "\n"
+            printf "COMMANDS\n"
+            printf "    help - show this help\n"
+            printf "\n"
+            printf "OPTIONS\n"
+            printf "    -d          Debug mode            (default: false)\n"
+            printf "    -h          Display help\n"
+            printf "    -k          SSH Private Key       (default: $HOME/.ssh/id_rsa)\n"
+            printf "    -u          SSH user              (default: sles)\n"
+            printf "\n"
+            printf "EXAMPLE\n"
+            printf "    $prog remove -u sles 192.168.200.201\n"
+            printf "        Remove RKE2 from host 192.168.200.201. Use \"sles\" as user for ssh.\n"
+            ;;
+        *)
+            printf "'$subcommand' is not a valid subcommand.\n"
+            exit 1
+            ;;
+    esac
+    exit 0
+}
+
+function prepare_ssh_payload() {
+
+    SERVER_CONF=$([ ! -z "${SERVER}" ] && echo "server: https://${SERVER}" || echo -n)
+#    TLSSAN_CONF=$([ ! -z "${TLSSAN}" ] && echo -e "tls-san:\n  - ${TLSSAN}" || echo -n)
+    PROFILE_CONF=$([ ! -z "${PROFILE}" ] && echo "profile: ${PROFILE}" || echo -n)
+    if [ -n "${TLSSAN}" ]; then
+        IFS=',' read -ra ADDR <<< "${TLSSAN}"
+        TLSSAN_CONF="tls-san:"
+        for i in "${ADDR[@]}"; do
+            TLSSAN_CONF+=$'\n  - '"${i}"
+        done
+    else
+        TLSSAN_CONF=""
+    fi
+    
+    if [ "${DEBUG}" -eq 1 ]; then
+      DEBUG="true"
+    else
+      DEBUG="false"
+    fi
+
+    if [ "${SELINUX}" -eq 1 ]; then
+      SELINUX="true"
+    else
+      SELINUX="false"
+    fi
+
+    # Create the payload
+    cat <<EOF
+if [ -f /etc/os-release ]; then
+    OS_NAME=\$(grep "^NAME=" /etc/os-release | cut -d \" -f 2)
+    OS_VERSION=\$(grep "^VERSION_ID=" /etc/os-release | cut -d \" -f 2)
+    case "\${OS_NAME}" in
+    "SLES")
+            echo "- The operating system is SLES."
+            echo "- Registering system to ${RMT}"
+            sudo SUSEConnect --url ${RMT}
+            if [ \$? -eq 0 ]; then
+              echo "- Installing iptables"
+              sudo zypper -n install iptables
+             else
+              echo "Failed to register SLES with the RMT server." 
+              exit 1
+            fi
+            ;;
+     esac
+fi
+
+### Configuration
+echo "- Creating /etc/rancher/rke2 directory..."
+sudo mkdir -p /etc/rancher/rke2/
+
+echo "- Generating /etc/rancher/rke2/config.yaml file..."
+sudo tee /etc/rancher/rke2/config.yaml > /dev/null << 'INNER_EOF'
+# RKE2 configuration settings
+token: ${TOKEN}
+cni: ${CNI}
+debug: ${DEBUG}
+selinux: ${SELINUX}
+write-kubeconfig-mode: ${MODE}
+${SERVER_CONF}
+${TLSSAN_CONF}
+${PROFILE_CONF}
+# End of configuration settings
+# More options: https://docs.rke2.io/reference/server_config
+INNER_EOF
+
+### CIS hardening
+if sudo grep -q "profile:" /etc/rancher/rke2/config.yaml; then
+  echo "- Writing CIS hardening configuration..."
+  sudo tee /etc/sysctl.d/90-kubelet.conf > /dev/null << 'INNER_EOF'
+# RKE2 CIS profile hardening
+vm.overcommit_memory=1
+kernel.panic=10
+kernel.panic_on_oops=1
+# end of CIS hardening
+INNER_EOF
+  sudo sysctl -p /etc/sysctl.d/90-kubelet.conf > /dev/null
+  sudo useradd -r -c "etcd user" -s /sbin/nologin -M etcd -U
+fi
+
+### Installation
+echo "- Downloading RKE2 version ${VERSION}..."
+curl -sfL https://get.rke2.io -o rke2.sh
+chmod 755 rke2.sh
+
+echo "- Installing RKE2..."
+sudo INSTALL_RKE2_VERSION="${VERSION}" \
+ INSTALL_RKE2_TYPE="${SRVTYPE}" \
+ INSTALL_RKE2_CHANNEL="${CHANNEL}" \
+ ./rke2.sh
+sudo systemctl enable rke2-${SRVTYPE}.service
+sudo systemctl start rke2-${SRVTYPE}.service
+
+### Status
+echo
+echo "- Waiting 15 seconds..."
+sleep 15 
+
+echo "- Service status:"
+sudo systemctl status rke2-${SRVTYPE}.service | head -4
+echo
+
+if [ -f /etc/rancher/rke2/rke2.yaml ]; then
+  echo "- Setting up kubectl to use the new cluster..."
+  mkdir -p .kube
+  sudo cp /etc/rancher/rke2/rke2.yaml .kube/config
+  USER_NAME=\$(whoami)
+  USER_GROUP=\$(id -gn)
+  sudo chown \${USER_NAME}:\${USER_GROUP} ~/.kube/config
+  curl -LO "https://dl.k8s.io/release/\$(curl -L -s \
+  https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+  sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
+  echo
+  echo "- Verifying the cluster..."
+  kubectl get nodes
+fi
+EOF
+}
+
+
+function remove ()
+{
+    while getopts ":k:u:dh" opt
+    do
+        case "$opt" in
+            k ) PRIVKEY="${OPTARG}" ;;
+            u ) LOGIN_USER="${OPTARG}" ;;
+            h ) usage ;;
+            * ) die "Unsupported option. Run 'install-rke2 help remove'." ;;
+        esac
+    done
+
+    shift $((OPTIND - 1))
+
+    if [ "$#" != 1 ]
+    then
+        printf "Please specify a single host to remove.\n"
+        printf "Run 'install-rke2 help remove' for usage.\n"
+        exit 1
+    else
+        VMNAME=$1
+    fi
+
+    ssh -o StrictHostKeyChecking=no -i "${PRIVKEY}" "${LOGIN_USER}"@"${VMNAME}" 'sudo /usr/local/bin/rke2-uninstall.sh'
+}
+
+function create ()
+{
+    while getopts ":c:C:k:p:s:S:t:T:u:V:w:xdh" opt
+    do
+        case "$opt" in
+            c ) CNI="${OPTARG}" ;;
+            C ) CHANNEL="${OPTARG}" ;;
+            d ) DEBUG=1 ;;
+            k ) PRIVKEY="${OPTARG}" ;;
+            p ) PROFILE="${OPTARG}" ;;
+            s ) SRVTYPE="${OPTARG}" ;;
+            S ) SERVER="${OPTARG}" ;;
+            t ) TLSSAN="${OPTARG}" ;;
+            T ) TOKEN="${OPTARG}" ;;
+            u ) LOGIN_USER="${OPTARG}" ;;
+            V ) VERSION="${OPTARG}" ;;
+            w ) MODE="${OPTARG}" ;;
+            x ) SELINUX=1 ;;
+            h ) usage ;;
+            * ) die "Unsupported option. Run 'install-rke2 help create'." ;;
+        esac
+    done
+
+    shift $((OPTIND - 1))
+
+    # After all options are processed, make sure only one variable is left (vmname)
+    if [ "$#" != 1 ]
+    then
+        printf "Please specify a single host to create.\n"
+        printf "Run 'install-rke2 help create' for usage.\n"
+        exit 1
+    else
+        VMNAME=$1
+    fi
+
+    ssh -o StrictHostKeyChecking=no -i "${PRIVKEY}" "${LOGIN_USER}"@"${VMNAME}" 2>/dev/null <<< "$(prepare_ssh_payload)"
+}
+
+
+#--------------------------------------------------
+# Main
+#--------------------------------------------------
+
+subcommand="${1:-none}"
+[[ "${subcommand}" != "none" ]] && shift
+
+case "${subcommand}" in
+    none)
+        usage
+        ;;
+    help)
+        if [[ "${1:-none}" == "none" ]]; then
+            usage
+        elif [[ "$1" =~ ^create$|^remove$ ]]; then
+            usage_subcommand "$1"
+        else
+            printf "'$1' is not a valid subcommand.\n\n"
+            usage
+        fi
+        ;;
+    create|remove)
+        if [[ "${1:-none}" == "none" ]]; then
+            usage_subcommand "${subcommand}"
+        elif [[ "$1" =~ ^help$ ]]; then
+            usage_subcommand "${subcommand}"
+        else
+            set_defaults
+            set_custom_defaults
+            "${subcommand}" "$@"
+            exit $?
+        fi
+        ;;
+    *)
+        die "'${subcommand}' is not a valid subcommand.  See 'install-rke2 help' for a list of subcommands."
+        ;;
+esac

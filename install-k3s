@@ -1,0 +1,308 @@
+#!/bin/bash
+set -e
+
+prog=${0##*/}
+source $(dirname "$(readlink -f "$0")")/functions.sh
+
+function usage ()
+{
+    cat << EOF
+NAME
+    install-k3s - Install K3S node on a VM.
+
+SYNOPSIS
+    $prog COMMAND [OPTIONS]
+
+DESCRIPTION
+    A bash script to install and remove K3S nodes. The aim is to simplify
+    the installation and make the deployments scriptable.
+
+COMMANDS
+    create      - create a new K3S node
+    remove      - delete a K3S node
+    help        - show this help or help for a subcommand
+EOF
+    exit 0
+}
+
+function usage_subcommand ()
+{
+    case "$1" in
+        create)
+            printf "NAME\n"
+            printf "    $prog create [COMMANDS] [OPTIONS] HOST\n"
+            printf "\n"
+            printf "DESCRIPTION\n"
+            printf "    Create a new K3S node.\n"
+            printf "\n"
+            printf "COMMANDS\n"
+            printf "    help - show this help\n"
+            printf "\n"
+            printf "OPTIONS\n"
+            printf "    -C          K3S Channel           (default: stable)\n"
+            printf "    -d          Debug mode            (default: false)\n"
+            printf "    -h          Display help\n"
+            printf "    -i          cluster-init          (default: false)\n"
+            printf "    -k          SSH Private Key       (default: $HOME/.ssh/id_rsa)\n"
+            printf "    -s          Service type          (default: server)\n"
+            printf "    -S          Server to connect to  (default: none)\n"
+            printf "    -t          TLS-SAN hostname/ip   (default: none)\n"
+            printf "    -T          Token for auth        (default: foo)\n"
+            printf "    -u          SSH user              (default: sles)\n"
+            printf "    -V          K3S Version           (default: none)\n"
+            printf "    -w          Write kubeconfig mode (default: 777)\n"
+            printf "\n"
+            printf "EXAMPLES\n"
+            printf "    $prog create 192.168.200.201\n"
+            printf "        Create a new K3S server node on host 192.168.200.201 with default settings.\n"
+            printf "\n"
+            printf "    $prog create -s agent -S 192.169.200.201:6443 -T secret 192.168.200.202\n"
+            printf "        Create a new K3S agent node that connects to existing server node 192.168.200.201.\n"
+            printf "        Use token \"secret\". Host machine is 192.168.200.202.\n"
+            printf "\n"
+            printf "    $prog create -d -C testing -t lb.example.local 192.168.200.203\n"
+            printf "        Create a new K3S server node on host 192.168.200.203. Turn on debug information.\n"
+            printf "        Channel \"testing\" will be used and loabalancer FQDN will be added to TLS-SAN.\n"
+            printf "\n"
+            printf "    $prog create -V v1.28.6+k3s1 -w 600 -u ubuntu 192.168.200.204\n"
+            printf "        Create a new K3S server node with version 1.28.6. Write kubeconfig so that only\n"
+            printf "        owner can read and write to it. Use \"ubuntu\" as user for ssh.\n" 
+            printf "\n"
+            ;;
+        remove)
+            printf "NAME\n"
+            printf "    $prog remove [COMMANDS] HOST\n"
+            printf "\n"
+            printf "DESCRIPTION\n"
+            printf "    Uninstalls K3S completely from specified host.\n"
+            printf "\n"
+            printf "COMMANDS\n"
+            printf "    help - show this help\n"
+            printf "\n"
+            printf "OPTIONS\n"
+            printf "    -h          Display help\n"
+            printf "    -k          SSH Private Key       (default: $HOME/.ssh/id_rsa)\n"
+            printf "    -u          SSH user              (default: sles)\n"
+            printf "\n"
+            printf "EXAMPLE\n"
+            printf "    $prog remove -u sles 192.168.200.201\n"
+            printf "        Remove K3S from host 192.168.200.201. Use \"sles\" as user for ssh.\n"
+            ;;
+        *)
+            printf "'$subcommand' is not a valid subcommand.\n"
+            exit 1
+            ;;
+    esac
+    exit 0
+}
+
+function prepare_ssh_payload() {
+  
+    SERVER_CONF=$([ ! -z "${SERVER}" ] && echo "server: https://${SERVER}" || echo -n)
+    #TLSSAN_CONF=$([ ! -z "${TLSSAN}" ] && echo -e "tls-san:\n  - ${TLSSAN}" || echo -n)    
+    if [ -n "${TLSSAN}" ]; then
+        IFS=',' read -ra ADDR <<< "${TLSSAN}"
+        TLSSAN_CONF="tls-san:"
+        for i in "${ADDR[@]}"; do
+            TLSSAN_CONF+=$'\n  - '"${i}"
+        done
+    else
+        TLSSAN_CONF=""
+    fi
+
+    if [[ "${SRVTYPE}" == agent ]]; then
+        MODE_CONF=""
+        TLSSAN_CONF=""
+    else
+        MODE_CONF=$([ ! -z "${MODE}" ] && echo -e "write-kubeconfig-mode: ${MODE}" || echo -n)    
+    fi
+
+    if [ "${DEBUG}" -eq 1 ]; then
+      DEBUG="true"
+    else
+      DEBUG="false"
+    fi
+
+    if [ "${CLUSTER_INIT}" -eq 1 ]; then
+      CLUSTER_INIT="cluster-init: true"
+    else
+      CLUSTER_INIT=""
+    fi
+
+  # Create the payload
+  cat <<EOF
+if [ -f /etc/os-release ]; then
+    OS_NAME=\$(grep "^NAME=" /etc/os-release | cut -d \" -f 2)
+    OS_VERSION=\$(grep "^VERSION_ID=" /etc/os-release | cut -d \" -f 2)
+    case "\${OS_NAME}" in
+        "SLES")
+            echo "- The operating system is SLES."
+            echo "- Registering system to ${RMT}"
+            sudo SUSEConnect --url ${RMT}
+            if [ \$? -eq 0 ]; then
+              echo "- Installing iptables"
+              sudo zypper -n install iptables
+             else
+              echo "Failed to register SLES with the RMT server."
+              exit 1
+            fi
+            ;;
+     esac
+fi
+
+### Configuration
+echo "- Creating /etc/rancher/k3s directory..."
+sudo mkdir -p /etc/rancher/k3s/
+
+echo "- Generating /etc/rancher/k3s/config.yaml file..."
+sudo tee /etc/rancher/k3s/config.yaml > /dev/null << 'INNER_EOF'
+# K3S configuration settings
+token: ${TOKEN}
+debug: ${DEBUG}
+${MODE_CONF}
+${SERVER_CONF}
+${TLSSAN_CONF}
+${CLUSTER_INIT}
+# End of configuration settings
+# More options: https://docs.k3s.io/
+INNER_EOF
+
+### Installation
+echo "- Downloading K3S version ${VERSION}..."
+curl -sfL https://get.k3s.io -o k3s.sh
+chmod 755 k3s.sh
+
+echo "- Installing K3S..."
+sudo INSTALL_K3S_VERSION="${VERSION}" \
+INSTALL_K3S_EXEC="${SRVTYPE}" \
+INSTALL_K3S_CHANNEL="${CHANNEL}" \
+./k3s.sh
+
+### Status
+echo
+echo "- Waiting 15 seconds..."
+sleep 15
+
+echo "- Service status:"
+sudo systemctl status k3s.service | head -4
+sudo systemctl status k3s-agent.service | head -4
+echo
+
+if [ -f /etc/rancher/k3s/k3s.yaml ]; then
+  echo "- Setting up kubectl to use the new cluster..."
+  mkdir -p .kube
+  sudo cp /etc/rancher/k3s/k3s.yaml .kube/config
+  USER_NAME=\$(whoami)
+  USER_GROUP=\$(id -gn)
+  sudo chown \${USER_NAME}:\${USER_GROUP} ~/.kube/config
+  curl -LO "https://dl.k8s.io/release/\$(curl -L -s \
+  https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+  sudo install -o root -g root -m 0755 kubectl /usr/local/bin/kubectl
+  echo
+  echo "- Verifying the cluster..."
+  kubectl get nodes
+fi
+EOF
+}
+
+
+function remove ()
+{
+    while getopts ":k:u:h" opt
+    do
+        case "$opt" in
+            k ) PRIVKEY="${OPTARG}" ;;
+            u ) LOGIN_USER="${OPTARG}" ;;
+            h ) usage ;;
+            * ) die "Unsupported option. Run 'install-k3s help remove'." ;;
+        esac
+    done
+
+    shift $((OPTIND - 1))
+
+    if [ "$#" != 1 ]
+    then
+        printf "Please specify a single host to remove.\n"
+        printf "Run 'install-k3s help remove' for usage.\n"
+        exit 1
+    else
+        VMNAME=$1
+    fi
+
+    ssh -o StrictHostKeyChecking=no -i "${PRIVKEY}" "${LOGIN_USER}"@"${VMNAME}" 'sudo /usr/local/bin/k3s-uninstall.sh; sudo /usr/local/bin/k3s-agent-uninstall.sh'
+}
+
+function create ()
+{
+    while getopts ":C:k:s:S:t:T:u:V:w:idh" opt
+    do
+        case "$opt" in
+            C ) CHANNEL="${OPTARG}" ;;
+            d ) DEBUG=1 ;;
+            k ) PRIVKEY="${OPTARG}" ;;
+            i ) CLUSTER_INIT=1 ;;
+            s ) SRVTYPE="${OPTARG}" ;;
+            S ) SERVER="${OPTARG}" ;;
+            t ) TLSSAN="${OPTARG}" ;;
+            T ) TOKEN="${OPTARG}" ;;
+            u ) LOGIN_USER="${OPTARG}" ;;
+            V ) VERSION="${OPTARG}" ;;
+            w ) MODE="${OPTARG}" ;;
+            h ) usage ;;
+            * ) die "Unsupported option. Run 'install-k3s help create'." ;;
+        esac
+    done
+
+    shift $((OPTIND - 1))
+
+    # After all options are processed, make sure only one variable is left (vmname)
+    if [ "$#" != 1 ]
+    then
+        printf "Please specify a single host to create.\n"
+        printf "Run 'install-k3s help create' for usage.\n"
+        exit 1
+    else
+        VMNAME=$1
+    fi
+
+    ssh -o StrictHostKeyChecking=no -i "${PRIVKEY}" "${LOGIN_USER}"@"${VMNAME}" 2>/dev/null <<< "$(prepare_ssh_payload)"
+}
+
+
+#--------------------------------------------------
+# Main
+#--------------------------------------------------
+
+subcommand="${1:-none}"
+[[ "${subcommand}" != "none" ]] && shift
+
+case "${subcommand}" in
+    none)
+        usage
+        ;;
+    help)
+        if [[ "${1:-none}" == "none" ]]; then
+            usage
+        elif [[ "$1" =~ ^create$|^remove$ ]]; then
+            usage_subcommand "$1"
+        else
+            printf "'$1' is not a valid subcommand.\n\n"
+            usage
+        fi
+        ;;
+    create|remove)
+        if [[ "${1:-none}" == "none" ]]; then
+            usage_subcommand "${subcommand}"
+        elif [[ "$1" =~ ^help$ ]]; then
+            usage_subcommand "${subcommand}"
+        else
+            set_defaults
+            set_custom_defaults
+            "${subcommand}" "$@"
+            exit $?
+        fi
+        ;;
+    *)
+        die "'${subcommand}' is not a valid subcommand.  See 'install-k3s help' for a list of subcommands."
+        ;;
+esac

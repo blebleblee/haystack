@@ -1,0 +1,138 @@
+recipe_desc: |
+  Example recipe. Two RKE2 nodes (master/worker) + Harvester node.
+  Loadbalancer is configured for RKE2 and Rancher.
+  Requirements: CPU: 12, Memory: 40GB, Disk: 500GB
+  Versions: RKE2 1.26.13+rke2r1, Harvester 1.2.1, Rancher 2.7.9
+  Network: 192.168.143.1/24 (br-rancher), 192.168.144.1/24 (br-mgmt)
+
+default_network: &default_network             
+  gw: 192.168.143.1                           # Default gateway ip address
+  dns: 192.168.200.2                          # DNS resolver ip address
+  bridge: br-rancher                          # VM node bridge
+  domain: example.local                       # Default domain
+  netmask: 24                                 # VM network mask
+
+default_vm: &default_vm                       
+  vcpu: 2                                     # Default vcpu count for a node
+  disk: 20                                    # Default VM root disk size in GB
+  memory: 4096                                # Default VM memory in MB
+
+default_kubernetes: &default_kubernetes       
+  version: v1.26.13+rke2r1                    # RKE2 version
+  type: rke2                                  # Kubernetes type
+  channel: stable                             # RKE2 channel (stable,latest)
+  cni: calico                                 # CNI plugin
+  debug: true                                 # Turn debug on/off
+  selinux: false                              # Enable or disable selinux support
+  privkey: /root/.ssh/id_rsa                  # Path to ssh key for logging to VM
+  tlssan: 192.168.143.1.sslip.io              # TLS-SAN entries in RKE2 config
+  token: secrets                              # RKE2 token
+  mode: 600                                   # kubeconfig ACL
+
+default_node: &default_node                   
+  distro: opensuse155                         # Image distro name
+  user: opensuse                              # Default user
+
+nodes:                                        
+  - name: node1                               # Node name
+    network:                                  
+      <<: *default_network                    # Alias to default network anchor
+      ip: &node1_ip 192.168.143.10            # Node IP address and anchor
+    vm:                                       
+      <<: *default_vm                         # Alias to default VM anchor
+    kubernetes:                               
+      <<: *default_kubernetes                 # Alias to kubernetes anchor settings
+      servicetype: server                     # Node service type (server, agent)
+    <<: *default_node                         # Alias to default node settings
+    join: false                               # Cluster join (true, false)
+  - name: node2                               
+    network:
+      <<: *default_network
+      ip: &node2_ip 192.168.143.11
+    vm:
+      <<: *default_vm
+    kubernetes:
+      <<: *default_kubernetes
+      servicetype: agent
+      server: 192.168.143.1:9345              # Server to join (ip:port)
+    <<: *default_node                         # Alias to default node settings
+    join: true   
+
+loadbalancer:                                 # Loadbalancer definition
+  - port: 6443                                # Server port number
+    upstream: rke2_api                        # Upstream name
+    nodes:                                    
+      node1: *node1_ip                        # Format is node: alias to node ip
+    nodeport: 6443                            # Node port number
+  - port: 9345
+    upstream: rke2_mgmt
+    nodes:
+      node1: *node1_ip
+    nodeport: 9345
+  - port: 80
+    upstream: rancher_http
+    nodes:
+      node1: *node2_ip
+    nodeport: 80
+  - port: 443
+    upstream: rancher_https
+    nodes:
+      node1: *node2_ip
+    nodeport: 443
+
+rancher:
+  - name: rancher1                            # Rancher configuration
+    <<: *default_node                         # Include node anchor
+    ip: *node1_ip                             # Alias to Kubernetes node ip
+    namespace: cattle-system                  # Namespace for Rancher installation
+    repo: prime                               # Repository (stable, latest, prime)
+    certman: 1.14.1                           # Cert-manager version
+    version: 2.7.9                            # Rancher version
+    replica: 1                                # Number of replicas
+    hostname: 192.168.143.1.sslip.io          # Rancher hostname
+    password: admin                           # Bootstrap password
+
+harvester:                                    
+  - name: harv1                               # Node name
+    network:                                  
+      gw: 192.168.144.1
+      dns: 192.168.200.2
+      bridge: br-mgmt                         
+      domain: example.local
+      ip: &harv_ip 192.168.144.100
+      netmask: 24
+      bond: true                             # Node will start with two nics
+      addnic: true                           # Extra nic will be added for VM net
+      addnicbr: br-public                    # Extra nic bridge
+      vip: 192.168.144.200                   # Harvester VIP
+      ntp: 192.168.200.2
+    vm:                                      
+      vcpu: 8
+      disk: 250 
+      memory: 32767 
+      nvme: 1                                # Additional NVMe disks attached
+      nvmesize: 100                          # Size of each NVMe in GB
+    distro: harv121                          # Harvester version 1.2.1
+    skipchecks: false                        # Checks applied (true) or not (false)
+    zone: zone0                              # Node affinity zone
+    token: shhhhh                            # Cluster token
+    join: false                              # Join cluster (true) or not (false)
+
+kubeconfig:
+  - name: rancher1                           # Rancher configuration
+    <<: *default_node                        # Include node anchor
+    ip: *node1_ip                            # Alias to Kubernetes node ip
+    file: ~/.kube/kc_192.168.143.10          # Local filename 
+    merge: true                              # Merge kubeconfig
+    context: rke2_192.168.143.10             # Kubeconfig context
+    server: 192.168.143.10:6443              # Kubeconfig server/port
+    type: rke2                               # Cluster type
+  - name: harv1                              # Harvester configuration
+    user: rancher                            # Include node anchor
+    ip: *harv_ip                             # Alias to Kubernetes node ip
+    file: ~/.kube/kc_192.168.144.100         # Local filename 
+    merge: true                              # Merge kubeconfig
+    context: harv_192.168.144.100            # Kubeconfig context
+    server: 192.168.144.100:6443             # Kubeconfig server:port
+    type: rke2                               # Cluster type
+    sudopass: password                       # Password for sudo command

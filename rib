@@ -1,0 +1,879 @@
+#!/bin/bash
+set -e
+
+# Set program name variable - basename without subshell
+prog=${0##*/}
+source $(dirname "$(readlink -f "$0")")/functions.sh
+
+function usage ()
+{
+    cat << EOF
+NAME
+    rib - Rancher Infrastructure Builder creates and removes Rancher product deployments 
+    on a local KVM hypervisor. It starts/stops already built environments.
+
+SYNOPSIS
+    $prog COMMAND [OPTIONS]
+
+DESCRIPTION
+    RIB or Rancher Infrastructure Builder is a tool to easily create and tear down infrastructure,
+    install Rancher products like RKE2 clusters or Harvester on a local KVM hypervisor. 
+    It can also start/stop existing deployments easily.
+
+COMMANDS
+    create      - create a new infrastructure
+    remove      - delete deployed infrastructure
+    start       - start existing infrastructure
+    stop        - stop existing infrastructure
+    list        - list all available recipes and descriptions
+    help        - show this help or help for a subcommand
+EOF
+    exit 0
+}
+
+function usage_subcommand ()
+{
+    case "$1" in
+        create)
+            printf "NAME\n"
+            printf "    $prog create [COMMANDS] [OPTIONS] RECIPE\n"
+            printf "\n"
+            printf "DESCRIPTION\n"
+            printf "    Create a new infrastructure based on a recipe.\n"
+            printf "\n"
+            printf "COMMANDS\n"
+            printf "    help - show this help\n"
+            printf "\n"
+            printf "OPTIONS\n"
+            printf "    -y          Assume yes to prompts (default: false)\n"
+            printf "    -n          Assume no to prompts  (default: false)\n"
+            printf "\n"
+            printf "EXAMPLES\n"
+            printf "    $prog create foo\n"
+            printf "        Create infrastructure from the recipe\"foo\".\n"
+            printf "\n"
+            ;;
+        remove)
+            printf "NAME\n"
+            printf "    $prog remove [COMMANDS] RECIPE\n"
+            printf "\n"
+            printf "DESCRIPTION\n"
+            printf "    Removes infrastructure defined by a recipe.\n"
+            printf "\n"
+            printf "COMMANDS\n"
+            printf "    help - show this help\n"
+            printf "\n"
+            printf "OPTIONS\n"
+            printf "    -y          Assume yes to prompts (default: false)\n"
+            printf "    -n          Assume no to prompts  (default: true)\n"
+            printf "\n"
+            printf "EXAMPLE\n"
+            printf "    $prog remove foo\n"
+            printf "        Remove (destroy and undefine) all VMs and loadbalancers in the recipe \"foo\".\n"
+            ;;
+        start)
+            printf "NAME\n"
+            printf "    $prog start [COMMANDS] RECIPE\n"
+            printf "\n"
+            printf "DESCRIPTION\n"
+            printf "    Start deployed recipe objects.\n"
+            printf "\n"
+            printf "COMMANDS\n"
+            printf "    help - show this help\n"
+            printf "\n"
+            printf "EXAMPLES\n"
+            printf "    $prog start foo\n"
+            printf "        Start infrastructure defined within the recipe\"foo\".\n"
+            printf "\n"
+            ;;
+        stop)
+            printf "NAME\n"
+            printf "    $prog stop [COMMANDS] RECIPE\n"
+            printf "\n"
+            printf "DESCRIPTION\n"
+            printf "    Stop deployed recipe objects.\n"
+            printf "\n"
+            printf "COMMANDS\n"
+            printf "    help - show this help\n"
+            printf "\n"
+            printf "EXAMPLES\n"
+            printf "    $prog stop foo\n"
+            printf "        Stop infrastructure defined within the recipe\"foo\".\n"
+            printf "\n"
+            ;;
+        list)
+            printf "NAME\n"
+            printf "    $prog list\n"
+            printf "\n"
+            printf "DESCRIPTION\n"
+            printf "    Lists all available recipes and descriptions.\n"
+            ;;
+        *)
+            printf "'$subcommand' is not a valid subcommand.\n"
+            exit 1
+            ;;
+    esac
+    exit 0
+}
+
+check_yq() {
+    # Check if yq is installed
+    if ! command -v yq &> /dev/null; then
+        echo "yq not found, please install it first."
+        exit 1
+    fi
+}
+
+check_vm_network() {
+    local VM_IP="$1"
+    local TIMEOUT=30
+    local START_TIME=$(date +%s)
+
+    outputn "Checking if ${VM_IP} is reachable"
+
+    while true; do
+        # Ping the VM
+        if ping -c 1 -W 1 "${VM_IP}" > /dev/null 2>&1; then
+            ok
+            return 0
+        fi
+
+        # Check if timeout has been reached
+        local CURRENT_TIME=$(date +%s)
+        if (( CURRENT_TIME - START_TIME >= TIMEOUT )); then
+            die "${VM_IP} is not reachable after ${TIMEOUT} seconds. Exiting."
+            exit 1
+        fi
+
+        sleep 1
+    done
+}
+
+list_recipes() {
+    # Lists all available recipes with description
+    check_yq
+    for RCP_FILE in "${RECIPEDIR}"/*.rcp; do
+        # Check if the file exists and is not a directory
+        if [[ -f "$RCP_FILE" ]]; then
+            RECIPE_DESC=$(yq e -r '.recipe_desc' "$RCP_FILE")
+            bold "File: $(basename "$RCP_FILE")"
+            echo "Description: $RECIPE_DESC"
+            echo "-------------------------------------------------------------------------"
+        fi
+    done
+}
+
+load_properties() {
+  local CONTENT=$1
+  local -n PROPERTIES=$2 # Use nameref for indirection
+
+  # Read keys from the YAML content
+  local KEYS=($(echo "$CONTENT" | yq e 'keys' -))
+
+  # Loop over the keys to get values
+  for KEY in "${KEYS[@]}"; do
+    # Skip invalid keys
+    if [[ $KEY == "-" || $KEY == "null" || -z $KEY ]]; then
+      continue
+    fi
+
+    if [[ $KEY == "network" || $KEY == "vm" || $KEY == "kubernetes" || $KEY == "nodes" ]]; then
+      # Handle nested keys
+      local SUBKEYS=($(echo "$CONTENT" | yq e ".$KEY | keys" - | grep -v '^-$'))
+      for SUBKEY in "${SUBKEYS[@]}"; do
+        # Skip invalid subkeys
+        if [[ $SUBKEY == "-" || $SUBKEY == "null" || -z $SUBKEY ]]; then
+          continue
+        fi
+        local VALUE=$(echo "$CONTENT" | yq e ".$KEY.$SUBKEY" -)
+        local FULL_KEY="${KEY^^}_${SUBKEY^^}" # Convert to uppercase
+        PROPERTIES[$FULL_KEY]=$VALUE
+      done
+    else
+      # Handle top-level keys
+      local VALUE=$(echo "$CONTENT" | yq e ".$KEY" -)
+      local UPPERCASE_KEY=${KEY^^} # Convert to uppercase
+      PROPERTIES[$UPPERCASE_KEY]=$VALUE
+    fi
+  done
+}
+
+print_properties_by_prefix() {
+  local PREFIX=$1
+  local -n PROPERTIES=$2
+ 
+  for KEY in "${!PROPERTIES[@]}"; do
+    if [[ $KEY == $PREFIX* ]]; then
+      echo "$KEY: ${PROPERTIES[$KEY]}"
+    fi
+  done
+}
+
+load_recipe() {
+    # Check if the recipe ends with .rcp
+    if [[ "${RECIPE}" == *.rcp ]]; then
+        RCP_FILE="${RECIPEDIR}/${RECIPE}"
+    else
+        RCP_FILE="${RECIPEDIR}/${RECIPE}.rcp"
+    fi
+
+    RCP_FILE="$(yq e '. | explode(.)' "${RCP_FILE}")"
+
+    declare -A SECTIONS=(
+        ["loadbalancer"]="LB_PORT"
+        ["nodes"]="NODE"
+        ["harvester"]="HARVESTER"
+        ["rancher"]="RANCHER"
+        ["kubeconfig"]="KUBECONFIG"
+    )
+
+    for SECTION in "${!SECTIONS[@]}"; do
+        COUNT=$(echo "${RCP_FILE}" | yq e ".${SECTION} | length" -)
+        PREFIX=${SECTIONS[$SECTION]}
+        
+        # Dynamically create count variables like RANCHER_COUNT, LB_PORT_COUNT, etc.
+        declare -g "${PREFIX}_COUNT=$COUNT"
+
+        if [ "$COUNT" -ne 0 ]; then
+            outputn "Loading ${SECTION} properties" && ok
+            for ((i = 0; i < ${COUNT}; i++)); do
+                CONTENT=$(echo "$RCP_FILE" | yq e ".${SECTION}[$i]" -)
+                declare -gA "${PREFIX}${i}"
+                load_properties "$CONTENT" "${PREFIX}${i}"
+                
+                if [[ "${DEBUG}" -eq 1 ]]; then
+                    declare -n CURRENT_PROPERTIES="${PREFIX}${i}"
+                    for KEY in "${!CURRENT_PROPERTIES[@]}"; do
+                        if [[ ! $KEY =~ ^(VM_|NETWORK_|KUBERNETES_|NODES_).* ]]; then
+                            echo "${KEY}: ${CURRENT_PROPERTIES[$KEY]}"
+                        fi
+                    done
+                    print_properties_by_prefix "VM_" CURRENT_PROPERTIES
+                    print_properties_by_prefix "NETWORK_" CURRENT_PROPERTIES
+                    print_properties_by_prefix "KUBERNETES_" CURRENT_PROPERTIES
+                    print_properties_by_prefix "NODES_" CURRENT_PROPERTIES
+                    echo
+                fi
+            done
+        else
+            output "No ${SECTION} properties found!"
+        fi
+    done
+}
+
+create_lb() {
+  if [ -z "${REPLY}" ]; then
+     CMD_RESET="$DIR/manage-lb reset"
+  else  
+     CMD_RESET="$DIR/manage-lb reset -$REPLY"
+  fi 
+  eval "$CMD_RESET"
+
+  if [ "${BOOTSTRAP_LB}" = true ]; then
+     PORTS=1
+  else
+     PORTS="${LB_PORT_COUNT}"
+  fi
+
+  for ((i = 0; i < ${LB_PORT_COUNT}; i++)); do
+    CMD_PORT="$DIR/manage-lb add-port"
+    CMD_NODES="$DIR/manage-lb add-node"
+    NODES_COMBINED=""
+    declare -n CURRENT_PORT="LB_PORT${i}"
+
+    for KEY in "${!CURRENT_PORT[@]}"; do
+        # echo "$KEY has value ${CURRENT_PORT[$KEY]}"
+        VALUE="${CURRENT_PORT[$KEY]}"
+        case $KEY in
+            PORT) SERVER_PORT=" -P ${VALUE}" ;;
+            NODEPORT) NODE_PORT=" -n ${VALUE}" ;;
+            UPSTREAM) UPSTREAM=" -U ${VALUE}" ;;
+            NODES_*)
+                # Prefix the value with -X and append to the combined string
+                if [ "${BOOTSTRAP_LB}" = true ]; then
+                    NODES_COMBINED=" -N ${VALUE}"
+                else
+                    NODES_COMBINED+=" -N ${VALUE}"
+                fi
+                ;;
+        esac
+    done
+    # Trim the trailing space from the concatenated string
+    NODES_COMBINED="${NODES_COMBINED% }"
+    CMD_PORT="$CMD_PORT $SERVER_PORT $UPSTREAM"
+    CMD_NODES="$CMD_NODES $SERVER_PORT $NODE_PORT $NODES_COMBINED"
+
+    if [[ "${DEBUG}" -eq 1 ]]; then 
+        echo "Command is $CMD_PORT"
+        echo "Command is $CMD_NODES"
+    fi
+
+    # Execute the commands
+    output "Configuring loadbalancer server port"
+    eval "$CMD_PORT"
+    output "Configuring loadbalancer upstream"
+    eval "$CMD_NODES"
+  done
+}
+
+create_nodes() {
+  for ((i = 0; i < ${NODE_COUNT}; i++)); do
+    if [ -z "${REPLY}" ]; then
+      CMD_NODE="$DIR/kvm-install-vm create"
+    else
+      CMD_NODE="$DIR/kvm-install-vm create -$REPLY"
+    fi  
+    declare -n CURRENT_NODE="NODE${i}"
+
+    for KEY in "${!CURRENT_NODE[@]}"; do
+        VALUE="${CURRENT_NODE[$KEY]}"
+        # echo "$KEY has value ${CURRENT_NODE[$KEY]}"
+        case $KEY in
+            DISTRO) CMD_NODE+=" -t ${VALUE}" ;;
+            USER) CMD_NODE+=" -u ${VALUE}" ;;
+            VM_VCPU) CMD_NODE+=" -c ${VALUE}" ;;               
+            VM_DISK) CMD_NODE+=" -d ${VALUE}";;
+            VM_MEMORY) CMD_NODE+=" -m ${VALUE}";;
+            NETWORK_DNS) CMD_NODE+=" -R ${VALUE}";;
+            NETWORK_GW) CMD_NODE+=" -G ${VALUE}" ;;
+            NETWORK_DOMAIN) CMD_NODE+=" -D ${VALUE}" ;;
+            NETWORK_BRIDGE) CMD_NODE+=" -b ${VALUE}" ;;
+            NETWORK_IP) NETWORK_IP=" -I ${VALUE}" ;;
+            NETWORK_NETMASK) NETWORK_NETMASK="${VALUE}" ;;
+            NAME) VMNAME="${VALUE}" ;;                
+        esac
+    done
+    if [ -z "$VMNAME" ] || [ -z "$DISTRO" ] || [ -z "$USER" ]; then
+        die "Required parameters missing, check the recipe!"
+    fi
+
+    if [ -z "$NETWORK_IP" ]; then
+        CMD_NODE+=" ${VMNAME}"
+    else
+        CMD_NODE+=" ${NETWORK_IP}/${NETWORK_NETMASK} ${VMNAME}"
+    fi
+     
+    if [[ "${DEBUG}" -eq 1 ]]; then 
+        echo "Command is $CMD_NODE"
+    fi
+
+    # Execute the commands
+    output "Configuring VM ${VMNAME}"
+    eval "$CMD_NODE" && echo "===============================================================================" && \
+    outputn "Node ${VMNAME} created successfully" && ok || die "Node ${VMNAME} creation failed"
+    echo "==============================================================================="
+  done
+}
+
+create_kubernetes() {
+  for ((i = 0; i < ${NODE_COUNT}; i++)); do
+    declare -n CURRENT_NODE="NODE${i}"
+    CMD_K8S=""
+    JOIN="false"
+    KUBERNETES_SERVER=""
+    for KEY in "${!CURRENT_NODE[@]}"; do
+        VALUE="${CURRENT_NODE[$KEY]}"
+        # echo "$KEY has value ${CURRENT_NODE[$KEY]}"
+        case $KEY in
+            USER) USER="${VALUE}" && CMD_K8S+=" -u ${VALUE}" ;;
+            NETWORK_IP) NETWORK_IP="${VALUE}" ;;
+            JOIN) JOIN="${VALUE}" ;;
+            KUBERNETES_TLSSAN) CMD_K8S+=" -t ${VALUE}" ;;
+            KUBERNETES_CHANNEL)CMD_K8S+=" -C ${VALUE}" ;;
+            KUBERNETES_CNI) CMD_K8S+=" -c ${VALUE}" ;;
+            KUBERNETES_TYPE) KUBERNETES_TYPE="${VALUE}" ;;
+            KUBERNETES_PROFILE) CMD_K8S+=" -p ${VALUE}" ;;
+            KUBERNETES_SERVICETYPE) CMD_K8S+=" -s ${VALUE}" ;;
+            KUBERNETES_TOKEN) CMD_K8S+=" -T ${VALUE}" ;;
+            KUBERNETES_DEBUG) [[ "$VALUE" = "true" ]] && CMD_K8S+=" -d" ;;
+            KUBERNETES_SELINUX) [[ "$VALUE" = "true" ]] && CMD_K8S+=" -x" ;;
+            KUBERNETES_PRIVKEY) CMD_K8S+=" -k ${VALUE}" ;;
+            KUBERNETES_VERSION)CMD_K8S+=" -V ${VALUE}" ;;
+            KUBERNETES_MODE) CMD_K8S+=" -w ${VALUE}" ;;
+            KUBERNETES_SERVER) KUBERNETES_SERVER="${VALUE}" && CMD_K8S+=" -S ${VALUE}" ;;    
+            KUBERNETES_CLUSTERINIT) [[ "$VALUE" = "true" ]] && CMD_K8S+=" -i" ;;    
+        esac
+    done
+
+    if [ -z "$NETWORK_IP" ] || [ -z "$USER" ] || [ -z "$KUBERNETES_TYPE" ]; then
+        die "Required parameters missing, check the recipe!"
+    fi
+     
+    if [ "$KUBERNETES_TYPE" = "rke2" ]; then
+        CMD="$DIR/install-rke2 create"
+    elif [ "$KUBERNETES_TYPE" = "k3s" ]; then
+        CMD="$DIR/install-k3s create"
+    elif [ "$KUBERNETES_TYPE" = "rke" ]; then
+        CMD="$DIR/install-rke create" 
+    else
+        die "Unknown type: ${KUBERNETES_TYPE}"
+    fi
+
+    CMD+=" ${CMD_K8S} ${NETWORK_IP}" 
+
+    if [[ "${DEBUG}" -eq 1 ]]; then 
+        echo "Command is $CMD"
+    fi
+
+    if [[ "$JOIN" = "true" ]] && [[ -n "${KUBERNETES_SERVER}" ]]; then 
+        output "Installing and joining node ${NETWORK_IP} to ${KUBERNETES_TYPE} cluster"
+    elif [[ "$JOIN" != "true" ]] && [[ -z "${KUBERNETES_SERVER}" ]]; then 
+        output "Installing ${KUBERNETES_TYPE} node ${NETWORK_IP}"
+    else
+        die "Incorrect join configuration!"    
+    fi
+
+    check_vm_network "${NETWORK_IP}"
+    
+    eval "$CMD" && echo "===============================================================================" && \
+    outputn "Node ${NETWORK_IP} installed successfully" && ok || die "Node ${NETWORK_IP} installation failed"
+    echo "==============================================================================="
+  done
+}
+
+create_harvester() {
+  for ((i = 0; i < ${HARVESTER_COUNT}; i++)); do
+    if [ -z "${REPLY}" ]; then
+      CMD_HARV="$DIR/kvm-install-harv create"
+    else
+      CMD_HARV="$DIR/kvm-install-harv create -$REPLY"
+    fi
+    declare -n CURRENT_HARVESTER="HARVESTER${i}"
+    
+    for KEY in "${!CURRENT_HARVESTER[@]}"; do
+        VALUE="${CURRENT_HARVESTER[$KEY]}"
+        # echo "$KEY has value ${CURRENT_NODE[$KEY]}"
+        case $KEY in
+            DISTRO) DISTRO="${VALUE}" && CMD_HARV+=" -t ${VALUE}" ;;
+            VM_VCPU) CMD_HARV+=" -c ${VALUE}" ;;               
+            VM_DISK) CMD_HARV+=" -d ${VALUE}" ;;
+            VM_MEMORY) CMD_HARV+=" -m ${VALUE}" ;;
+            VM_NVME) CMD_HARV+=" -N ${VALUE}" ;;
+            VM_NVMESIZE) CMD_HARV+=" -o ${VALUE}" ;;                 
+            NETWORK_DNS) CMD_HARV+=" -R ${VALUE}" ;;
+            NETWORK_GW) CMD_HARV+=" -G ${VALUE}" ;;
+            NETWORK_DOMAIN) CMD_HARV+=" -D ${VALUE}" ;;
+            NETWORK_BOND) [[ "$VALUE" = "true" ]] && NETWORK_BOND="true" && CMD_HARV+=" -B" ;;
+            NETWORK_BRIDGE) CMD_HARV+=" -b ${VALUE}" ;;
+            NETWORK_IP) NETWORK_IP=" -I ${VALUE}" ;;
+            NETWORK_NETMASK) NETWORK_NETMASK="${VALUE}" ;;
+            NETWORK_NTP) CMD_HARV+=" -H ${VALUE}" ;;
+            NETWORK_PROXY) CMD_HARV+=" -P ${VALUE}" ;;
+            NETWORK_VIP) NETWORK_VIP="${VALUE}" && CMD_HARV+=" -i ${VALUE}" ;;                
+            NETWORK_ADDNIC) NETWORK_ADDNIC="${VALUE}" ;;               
+            NETWORK_ADDNICBR) NETWORK_ADDNICBR="${VALUE}" ;;               
+            SSL_CA) CMD_HARV+=" -C ${VALUE}" ;;
+            SSL_KEY) CMD_HARV+=" -S ${VALUE}" ;;    
+            SSL_CERT) CMD_HARV+=" -s ${VALUE}" ;;
+            JOIN) [[ "$VALUE" = "true" ]] && CMD_HARV+=" -J" ;;    
+            JOIN_SERVER) CMD_HARV+=" -j ${VALUE}" ;;                
+            ROLE) CMD_HARV+=" -r ${VALUE}" ;;
+            TOKEN) CMD_HARV+=" -T ${VALUE}";;     
+            ZONE) CMD_HARV+=" -z ${VALUE}" ;;
+            SKIPCHECKS) [[ "$VALUE" = "true" ]] && CMD_HARV+=" -x" ;;        
+            NAME) VMNAME="${VALUE}" ;;                
+        esac
+    done
+   
+    if [ -z "$VMNAME" ] || [ -z "$DISTRO" ] || [ -z "$NETWORK_VIP" ]; then
+        die "Required parameters missing, check the recipe.."
+    fi
+
+    if [ -z "$NETWORK_IP" ]; then
+        CMD_HARV+=" ${VMNAME}"
+    else
+        CMD_HARV+=" ${NETWORK_IP}/${NETWORK_NETMASK} ${VMNAME}"
+    fi
+     
+    if [[ "${DEBUG}" -eq 1 ]]; then 
+        echo "Command is $CMD_HARV"
+    fi
+
+    # Execute the commands
+    output "Configuring VM ${VMNAME}"
+    eval "$CMD_HARV" && echo "===============================================================================" && \
+    outputn "Node ${VMNAME} created successfully" && ok || die "Error creating node ${VMNAME}"
+    echo "==============================================================================="
+
+    if [ "${NETWORK_ADDNIC}" = true ] && [ ! -z "${NETWORK_ADDNICBR}" ]; then
+        output "Attaching new network card(s)"
+        eval "$DIR/kvm-install-harv attach-nic -b ${NETWORK_ADDNICBR} ${VMNAME}"
+        if [ "${NETWORK_BOND}" = true ]; then
+            eval "$DIR/kvm-install-harv attach-nic -b ${NETWORK_ADDNICBR} ${VMNAME}"
+        fi
+    fi
+    
+  done
+}
+
+create_rancher() {
+  CMD_RANCHER="$DIR/install-rancher create"
+
+  for ((i = 0; i < ${RANCHER_COUNT}; i++)); do
+    declare -n CURRENT_RANCHER="RANCHER${i}"
+
+    for KEY in "${!CURRENT_RANCHER[@]}"; do
+        VALUE="${CURRENT_RANCHER[$KEY]}"
+        # echo "$KEY has value ${CURRENT_NODE[$KEY]}"
+        case $KEY in
+            USER) USER="${VALUE}" && CMD_RANCHER+=" -u ${VALUE}" ;;
+            PASSWORD) CMD_RANCHER+=" -p ${VALUE}" ;;
+            IP) IP="${VALUE}" ;;
+            REPO) CMD_RANCHER+=" -r ${VALUE}" ;;
+            HOSTNAME)CMD_RANCHER+=" -H ${VALUE}" ;;
+            CERTMAN) CMD_RANCHER+=" -c ${VALUE}" ;;
+            NAMESPACE) CMD_RANCHER+=" -n ${VALUE}";;
+            VERSION) CMD_RANCHER+=" -V ${VALUE}" ;;
+            REPLICA) CMD_RANCHER+=" -R ${VALUE}";;
+            AUDIT) [[ "$VALUE" = "true" ]] && CMD_RANCHER+=" -a" ;;
+        esac
+    done
+
+    if [ -z "$IP" ] || [ -z "$USER" ] ; then
+        die "Required parameters missing, check the recipe!"
+    fi
+    
+    CMD=" ${CMD_RANCHER} ${IP}" 
+
+    if [[ "${DEBUG}" -eq 1 ]]; then 
+        echo "Command is $CMD"
+    fi
+    
+    eval "$CMD" && echo "===============================================================================" && \
+    outputn "Rancher installed successfully" && ok || die "Rancher installation failed"
+    echo "==============================================================================="
+  done
+}
+
+create_kubeconfig() {
+  CMD_KUBECONFIG="$DIR/manage-kubeconfig import"
+
+  for ((i = 0; i < ${KUBECONFIG_COUNT}; i++)); do
+    declare -n CURRENT_KUBECONFIG="KUBECONFIG${i}"
+
+    for KEY in "${!CURRENT_KUBECONFIG[@]}"; do
+        VALUE="${CURRENT_KUBECONFIG[$KEY]}"
+        # echo "$KEY has value ${CURRENT_NODE[$KEY]}"
+        case $KEY in
+            USER) USER="${VALUE}" && CMD_KUBECONFIG+=" -u ${VALUE}" ;;
+            FILE) CMD_KUBECONFIG+=" -f ${VALUE}" ;;
+            IP) IP="${VALUE}" ;;
+            CONTEXT) CMD_KUBECONFIG+=" -n ${VALUE}" ;;
+            TYPE)CMD_KUBECONFIG+=" -t ${VALUE}" ;;
+            SERVER)CMD_KUBECONFIG+=" -S ${VALUE}" ;;
+            MERGE) [[ "$VALUE" = "true" ]] && CMD_KUBECONFIG+=" -m" ;;
+            SUDOPASS)CMD_KUBECONFIG+=" -p ${VALUE}" ;;
+        esac
+    done
+
+    if [ -z "$IP" ] || [ -z "$USER" ] ; then
+        die "Required parameters missing, check the recipe!"
+    fi
+    
+    CMD=" ${CMD_KUBECONFIG} ${IP}" 
+
+    if [[ "${DEBUG}" -eq 1 ]]; then 
+        echo "Command is $CMD"
+    fi
+
+    eval "$CMD" && echo "===============================================================================" && \
+    outputn "Kubeconfig processed successfully" && ok || die "Kubeconfig processing failed"
+    echo "==============================================================================="
+  done
+}
+
+function create ()
+{
+    # Parse command line arguments
+    while getopts ":hynd" opt
+    do
+        case "$opt" in
+            y ) ASSUME_YES=1 ;;
+            n ) ASSUME_NO=1 ;;
+            d ) DEBUG=1 ;;
+            h ) usage ;;
+            * ) die "Unsupported option. Run 'rib help create'." ;;
+        esac
+    done
+
+    shift $((OPTIND - 1))
+
+    # Yes (-y) and No (-n) are mutually exclusive.
+    if [[ "${ASSUME_YES}" -eq 1 ]] && [[ "${ASSUME_NO}" -eq 1 ]]
+    then
+        printf "Please specify only one of -y or -n flags.\n"
+        exit 1
+    fi
+
+    # After all options are processed, make sure only one variable is left (vmname)
+    if [ "$#" != 1 ]
+    then
+        printf "Please specify a recipe to create.\n"
+        printf "Run 'rib help create' for usage.\n"
+        exit 1
+    else
+        RECIPE=$1
+    fi
+
+   # Get the directory of the current script
+   DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+   if [ "${ASSUME_YES}" -eq 1 ]; then
+       REPLY="y"
+   elif [ "${ASSUME_NO}" -eq 1 ]; then
+       REPLY="n"
+   fi 
+
+   # Check for ssh key
+    check_ssh_key
+
+    # Verify that yq is installed.
+    check_yq
+
+    bold "Loading recipe $RECIPE"
+    load_recipe
+
+    bold "Processing loadbalancer (bootstrap)"
+    BOOTSTRAP_LB=true
+    create_lb
+
+    bold "Processing nodes"
+    create_nodes
+
+    bold "Processing kubernetes"
+    create_kubernetes
+
+    bold "Processing loadbalancer"
+    BOOTSTRAP_LB=false
+    create_lb
+
+    bold "Processing Harvester"
+    create_harvester
+
+    bold "Processing Rancher"
+    create_rancher
+
+    bold "Processing Kubeconfig"
+    create_kubeconfig
+}
+
+function run_command() {
+    local COMMAND=$1
+    local VMNAME=""
+
+    case $COMMAND in
+        start)
+            CMD_NODE="virsh start"
+            MESSAGE="Starting VM "
+            CMD_HARV="virsh start"
+            ;;
+        stop)
+            CMD_NODE="virsh shutdown"
+            MESSAGE="Shutting down VM "
+            CMD_HARV="virsh shutdown"
+            ;;
+        remove)
+            CMD_NODE="$DIR/kvm-install-vm remove"
+            MESSAGE="Removing VM "
+            CMD_HARV="$DIR/kvm-install-harv remove"
+            ;;
+    esac        
+
+    for ((i = 0; i < ${NODE_COUNT}; i++)); do
+      declare -n CURRENT_NODE="NODE${i}"
+      VMNAME=""
+      for KEY in "${!CURRENT_NODE[@]}"; do
+          VALUE="${CURRENT_NODE[$KEY]}"
+          case $KEY in
+              NAME)
+                  VMNAME="${VALUE}"
+                 ;;                
+          esac
+      done
+      if [ -z "$VMNAME" ] ; then
+          die "Node name not found!"
+      fi
+     
+      if [[ "${DEBUG}" -eq 1 ]]; then 
+          echo "Command is $CMD_NODE"
+      fi
+
+      # Execute the commands
+      output "${MESSAGE} ${VMNAME}"
+      eval "${CMD_NODE} ${VMNAME}"
+    done
+
+    for ((i = 0; i < ${HARVESTER_COUNT}; i++)); do
+      declare -n CURRENT_HARV="HARVESTER${i}"
+      VMNAME=""
+      for KEY in "${!CURRENT_HARV[@]}"; do
+          VALUE="${CURRENT_HARV[$KEY]}"
+          case $KEY in
+              NAME)
+                  VMNAME="${VALUE}"
+                 ;;                
+          esac
+      done
+      if [ -z "$VMNAME" ] ; then
+          die "Harvester node name not found!"
+      fi
+     
+      if [[ "${DEBUG}" -eq 1 ]]; then 
+          echo "Command is $CMD_HARV"
+      fi
+
+      # Execute the commands
+      output "${MESSAGE} ${VMNAME}"
+      eval "${CMD_HARV} ${VMNAME}"
+    done
+}
+
+function remove ()
+{
+    # Parse command line arguments
+    while getopts ":hd" opt
+    do
+        case "$opt" in
+            d ) DEBUG=1 ;;
+            h ) usage ;;
+            * ) die "Unsupported option. Run 'rib help remove'." ;;
+        esac
+    done
+
+    shift $((OPTIND - 1))
+
+    # After all options are processed, make sure only one variable is left (vmname)
+    if [ "$#" != 1 ]
+    then
+        printf "Please specify a recipe to remove.\n"
+        printf "Run 'rib help remove' for usage.\n"
+        exit 1
+    else
+        RECIPE=$1
+    fi
+    
+    DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+
+   # Check for ssh key
+    check_ssh_key
+
+    # Verify that yq is installed.
+    check_yq
+
+    load_recipe
+
+    run_command "remove"
+}
+
+function start ()
+{
+    # Parse command line arguments
+    while getopts ":hd" opt
+    do
+        case "$opt" in
+            d ) DEBUG=1 ;;
+            h ) usage ;;
+            * ) die "Unsupported option. Run 'rib help start'." ;;
+        esac
+    done
+
+    shift $((OPTIND - 1))
+
+    # After all options are processed, make sure only one variable is left (vmname)
+    if [ "$#" != 1 ]
+    then
+        printf "Please specify a recipe to start.\n"
+        printf "Run 'rib help start' for usage.\n"
+        exit 1
+    else
+        RECIPE=$1
+    fi
+
+   # Check for ssh key
+    check_ssh_key
+
+    # Verify that yq is installed.
+    check_yq
+
+    load_recipe
+
+    run_command "start"
+}
+
+function stop ()
+{
+    # Parse command line arguments
+    while getopts ":hd" opt
+    do
+        case "$opt" in
+            d ) DEBUG=1 ;;
+            h ) usage ;;
+            * ) die "Unsupported option. Run 'rib help stop'." ;;
+        esac
+    done
+
+    shift $((OPTIND - 1))
+
+    # After all options are processed, make sure only one variable is left (vmname)
+    if [ "$#" != 1 ]
+    then
+        printf "Please specify a recipe to stop.\n"
+        printf "Run 'rib help stop' for usage.\n"
+        exit 1
+    else
+        RECIPE=$1
+    fi
+
+   # Check for ssh key
+    check_ssh_key
+
+    # Verify that yq is installed.
+    check_yq
+
+    load_recipe
+
+    run_command "stop"
+}
+
+#--------------------------------------------------
+# Main
+#--------------------------------------------------
+
+subcommand="${1:-none}"
+[[ "${subcommand}" != "none" ]] && shift
+
+case "${subcommand}" in
+    none)
+        usage
+        ;;
+    help)
+        if [[ "${1:-none}" == "none" ]]; then
+            usage
+        elif [[ "$1" =~ ^create$|^remove$|^list$|^start$|^stop$ ]]; then
+            usage_subcommand "$1"
+        else
+            printf "'$1' is not a valid subcommand.\n\n"
+            usage
+        fi
+        ;;
+    list)
+        set_defaults
+        set_custom_defaults
+        list_recipes
+        exit 0
+        ;;
+    create|remove|start|stop)
+        if [[ "${1:-none}" == "none" ]]; then
+            usage_subcommand "${subcommand}"
+        elif [[ "$1" =~ ^help$ ]]; then
+            usage_subcommand "${subcommand}"
+        else
+            set_defaults
+            set_custom_defaults
+            "${subcommand}" "$@"
+            exit $?
+        fi
+        ;;
+    *)
+        die "'${subcommand}' is not a valid subcommand.  See 'kvm-install-vm help' for a list of subcommands."
+        ;;
+esac

@@ -1,0 +1,21 @@
+#!/usr/bin/env bats
+
+@test "Check that mkisofs is available" {
+    command -v mkisofs
+}
+
+@test "Check that virt-install is available" {
+    command -v virt-install
+}
+
+@test "Check that virt-resize is available" {
+    command -v virt-resize
+}
+
+@test "Check that qemu-img is available" {
+    command -v qemu-img
+}
+
+@test "Check that virsh is available" {
+    command -v virsh
+}

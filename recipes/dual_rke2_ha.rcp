@@ -1,0 +1,157 @@
+recipe_desc: |
+  Example recipe file.  Two RKE2 single node cluster.
+  Loadbalancer is configured for both RKE2 clusters. 
+  Requirements: CPU: 12, Memory: 24GB, Disk: 120GB
+  Versions: RKE2 1.26.13+rke2r1, v1.30.1+rke2r1 
+  Network: 192.168.143.1/24 (br-rancher)
+
+default_network: &default_network             
+  gw: 192.168.143.1                           # Default gateway ip address
+  dns: 192.168.200.2                          # DNS resolver ip address
+  bridge: br-rancher                          # VM node bridge
+  domain: sslip.io                            # Default domain
+  netmask: 24                                 # VM network mask
+
+default_vm: &default_vm                       
+  vcpu: 2                                     # Default vcpu count for a node
+  disk: 20                                    # Default VM root disk size in GB
+  memory: 4096                                # Default VM memory in MB
+
+default_kubernetes: &default_kubernetes       
+  type: rke2                                  # Kubernetes type
+  channel: stable                             # RKE2 channel (stable,latest)
+  cni: calico                                 # CNI plugin
+  debug: true                                 # Turn debug on/off
+  selinux: false                              # Enable or disable selinux support
+  privkey: /root/.ssh/id_rsa                  # Path to ssh key for logging to VM
+  tlssan: 192.168.143.1.sslip.io,192.168.143.1
+  token: secrets                              # RKE2 token
+  mode: 600                                   # kubeconfig ACL
+
+default_node: &default_node                   
+  distro: opensuse155                         # Image distro name
+  user: opensuse                              # Default user
+
+nodes:                                        
+  - name: nodea1                               # Node name
+    network:                                  
+      <<: *default_network                    # Alias to default network anchor
+      ip: &nodea1_ip 192.168.143.10           # Node IP address and anchor
+    vm:                                       
+      <<: *default_vm                         # Alias to default VM anchor
+    kubernetes:                               
+      <<: *default_kubernetes                 # Alias to kubernetes anchor settings
+      servicetype: server                     # Node service type (server, agent)
+    <<: *default_node                         # Alias to default node settings
+    join: false                               # Cluster join (true, false)
+  - name: nodea2                              # Node name
+    network:                                  
+      <<: *default_network                    # Alias to default network anchor
+      ip: &nodea2_ip 192.168.143.11           # Node IP address and anchor
+    vm:                                       
+      <<: *default_vm                         # Alias to default VM anchor
+    kubernetes:                               
+      <<: *default_kubernetes                 # Alias to kubernetes anchor settings
+      servicetype: server                     # Node service type (server, agent)
+      server: 192.168.143.1.sslip.io:9345  
+    <<: *default_node                         # Alias to default node settings
+    join: true                                # Cluster join (true, false)
+  - name: nodea3                              # Node name
+    network:                                  
+      <<: *default_network                    # Alias to default network anchor
+      ip: &nodea3_ip 192.168.143.12           # Node IP address and anchor
+    vm:                                       
+      <<: *default_vm                         # Alias to default VM anchor
+    kubernetes:                               
+      <<: *default_kubernetes                 # Alias to kubernetes anchor settings
+      servicetype: server                     # Node service type (server, agent)
+      server: 192.168.143.1.sslip.io:9345  
+    <<: *default_node                         # Alias to default node settings
+    join: true                                # Cluster join (true, false)    
+  - name: nodeb1                              # Node name
+    network:                                  
+      <<: *default_network                    # Alias to default network anchor
+      ip: &nodeb1_ip 192.168.143.20           # Node IP address and anchor
+    vm:                                       
+      <<: *default_vm                         # Alias to default VM anchor
+    kubernetes:                               
+      <<: *default_kubernetes                 # Alias to kubernetes anchor settings
+      version: v1.30.1+rke2r1                 # RKE2 version
+      servicetype: server                     # Node service type (server, agent)
+    <<: *default_node                         # Alias to default node settings
+    join: false                               # Cluster join (true, false)
+  - name: nodeb2                              # Node name
+    network:                                  
+      <<: *default_network                    # Alias to default network anchor
+      ip: &nodeb2_ip 192.168.143.21           # Node IP address and anchor
+    vm:                                       
+      <<: *default_vm                         # Alias to default VM anchor
+    kubernetes:                               
+      <<: *default_kubernetes                 # Alias to kubernetes anchor settings
+      version: v1.30.1+rke2r1                 # RKE2 version
+      servicetype: server                     # Node service type (server, agent)
+      server: 192.168.143.1.sslip.io:9346  
+    <<: *default_node                         # Alias to default node settings
+    join: true                                # Cluster join (true, false)
+  - name: nodeb3                              # Node name
+    network:                                  
+      <<: *default_network                    # Alias to default network anchor
+      ip: &nodeb3_ip 192.168.143.22           # Node IP address and anchor
+    vm:                                       
+      <<: *default_vm                         # Alias to default VM anchor
+    kubernetes:                               
+      <<: *default_kubernetes                 # Alias to kubernetes anchor settings
+      version: v1.30.1+rke2r1                 # RKE2 version
+      servicetype: server                     # Node service type (server, agent)
+      server: 192.168.143.1.sslip.io:9346  
+    <<: *default_node                         # Alias to default node settings
+    join: true                                # Cluster join (true, false)    
+
+loadbalancer:                                 # Loadbalancer definition
+  - port: 6443                                # Server port number
+    upstream: rkea_api                        # Upstream name
+    nodes:                                    
+      node1: *nodea1_ip                       # Format is node: alias to node ip
+      node2: *nodea2_ip                       # Format is node: alias to node ip
+      node3: *nodea3_ip                       # Format is node: alias to node ip
+    nodeport: 6443                            # Node port number
+  - port: 9345
+    upstream: rkea_mgmt
+    nodes:
+      node1: *nodea1_ip
+      node2: *nodea2_ip                       # Format is node: alias to node ip
+      node3: *nodea3_ip                       # Format is node: alias to node ip
+    nodeport: 9345
+  - port: 6444                                # Server port number
+    upstream: rkeb_api                        # Upstream name
+    nodes:                                    
+      node1: *nodeb1_ip                       # Format is node: alias to node ip
+      node2: *nodeb2_ip                       # Format is node: alias to node ip
+      node3: *nodeb3_ip                       # Format is node: alias to node ip
+    nodeport: 6443                            # Node port number
+  - port: 9346
+    upstream: rkeb_mgmt
+    nodes:
+      node1: *nodeb1_ip
+      node2: *nodeb2_ip                       # Format is node: alias to node ip
+      node3: *nodeb3_ip                       # Format is node: alias to node ip
+    nodeport: 9345
+  
+kubeconfig:
+  - name: rkea                               # Rancher configuration
+    <<: *default_node                        # Include node anchor
+    ip: *nodea1_ip                           # Alias to Kubernetes node ip
+    file: ~/.kube/kc_192.168.143.10          # Local filename 
+    merge: true                              # Merge kubeconfig
+    context: rke2_192.168.143.10             # Kubeconfig context
+    server: 192.168.143.1:6443               # Kubeconfig server/port
+    type: rke2                               # Cluster type
+    kubeconfig:
+  - name: rkeb                               # Rancher configuration
+    <<: *default_node                        # Include node anchor
+    ip: *nodeb1_ip                           # Alias to Kubernetes node ip
+    file: ~/.kube/kc_192.168.143.20          # Local filename 
+    merge: true                              # Merge kubeconfig
+    context: rke2_192.168.143.20             # Kubeconfig context
+    server: 192.168.143.1:6444               # Kubeconfig server/port
+    type: rke2                               # Cluster type

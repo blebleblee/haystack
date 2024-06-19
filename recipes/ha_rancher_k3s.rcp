@@ -1,0 +1,157 @@
+recipe_desc: |
+  This is the example recipe file.  Rancher on K3S nodes.
+  Loadbalancer is configured for K3S/Rancher HA. 
+  Requirements: CPU: 12, Memory: 24GB, Disk: 120GB
+  Versions: K3S 1.26.13+k3s1, Rancher 2.8.4
+  Network: 192.168.143.1/24 (br-rancher)
+
+default_network: &default_network             
+  gw: 192.168.143.1                           # Default gateway ip address
+  dns: 192.168.200.2                          # DNS resolver ip address
+  bridge: br-rancher                          # VM node bridge
+  domain: example.local                       # Default domain
+  netmask: 24                                 # VM network mask
+
+default_vm: &default_vm                       
+  vcpu: 2                                     # Default vcpu count for a node
+  disk: 20                                    # Default VM root disk size in GB
+  memory: 4096                                # Default VM memory in MB
+
+default_kubernetes: &default_kubernetes       
+  version: v1.26.13+k3s1                     # RKE2 version
+  type: k3s                                   # Kubernetes type
+  channel: stable                             # RKE2 channel (stable,latest)
+  debug: true                                 # Turn debug on/off
+  privkey: /root/.ssh/id_rsa                  # Path to ssh key for logging to VM
+  tlssan: 192.168.143.1.sslip.io              # TLS-SAN entries in RKE2 config
+  token: secrets                              # RKE2 token
+  mode: 600                                   # kubeconfig ACL
+
+default_node: &default_node                   
+  distro: opensuse155                         # Image distro name
+  user: opensuse                              # Default user
+
+nodes:                                        
+  - name: node1                               # Node name
+    network:                                  
+      <<: *default_network                    # Alias to default network anchor
+      ip: &node1_ip 192.168.143.10            # Node IP address and anchor
+    vm:                                       
+      <<: *default_vm                         # Alias to default VM anchor
+    kubernetes:                               
+      <<: *default_kubernetes                 # Alias to kubernetes anchor settings
+      servicetype: server                     # Node service type (server, agent)
+      clusterinit: true
+    <<: *default_node                         # Alias to default node settings
+    join: false                               # Cluster join (true, false)
+  - name: node2                               # Node name
+    network:
+      <<: *default_network                    # Alias to default network anchor
+      ip: &node2_ip 192.168.143.11            # Node IP address and anchor
+    vm:
+      <<: *default_vm                         # Alias to default VM anchor
+    kubernetes:
+      <<: *default_kubernetes                 # Alias to kubernetes anchor settings
+      servicetype: server                     # Node service type (server, agent)
+      server: 192.168.143.1.sslip.io:6443
+    <<: *default_node                         # Alias to default node settings
+    join: true                                # Cluster join (true, false)
+  - name: node3                               # Node name
+    network:
+      <<: *default_network                    # Alias to default network anchor
+      ip: &node3_ip 192.168.143.12            # Node IP address and anchor
+    vm:
+      <<: *default_vm                         # Alias to default VM anchor
+    kubernetes:
+      <<: *default_kubernetes                 # Alias to kubernetes anchor settings
+      servicetype: server                     # Node service type (server, agent)
+      server: 192.168.143.1.sslip.io:6443
+    <<: *default_node                         # Alias to default node settings
+    join: true                                # Cluster join (true, false)
+  - name: node4                               # Node name
+    network:
+      <<: *default_network                    # Alias to default network anchor
+      ip: &node4_ip 192.168.143.20            # Node IP address and anchor
+    vm:
+      <<: *default_vm                         # Alias to default VM anchor
+    kubernetes:
+      <<: *default_kubernetes                 # Alias to kubernetes anchor settings
+      servicetype: agent                      # Node service type (server, agent)
+      server: 192.168.143.1.sslip.io:6443
+    <<: *default_node                         # Alias to default node settings
+    join: true                                # Cluster join (true, false)
+  - name: node5                               # Node name
+    network:
+      <<: *default_network                    # Alias to default network anchor
+      ip: &node5_ip 192.168.143.21            # Node IP address and anchor
+    vm:
+      <<: *default_vm                         # Alias to default VM anchor
+    kubernetes:
+      <<: *default_kubernetes                 # Alias to kubernetes anchor settings
+      servicetype: agent                      # Node service type (server, agent)
+      server: 192.168.143.1.sslip.io:6443
+    <<: *default_node                         # Alias to default node settings
+    join: true                                # Cluster join (true, false)
+  - name: node6                               # Node name
+    network:
+      <<: *default_network                    # Alias to default network anchor
+      ip: &node6_ip 192.168.143.22            # Node IP address and anchor
+    vm:
+      <<: *default_vm                         # Alias to default VM anchor
+    kubernetes:
+      <<: *default_kubernetes                 # Alias to kubernetes anchor settings
+      servicetype: agent                      # Node service type (server, agent)
+      server: 192.168.143.1.sslip.io:6443
+    <<: *default_node                         # Alias to default node settings
+    join: true                                # Cluster join (true, false)
+
+loadbalancer:                                 # Loadbalancer definition
+  - port: 6443                                # Server port number
+    upstream: k3s_api                         # Upstream name
+    nodes:                                    
+      node1: *node1_ip                        # Format is node: alias to node ip
+      node2: *node2_ip                        # Format is node: alias to node ip
+      node3: *node3_ip                        # Format is node: alias to node ip
+    nodeport: 6443                            # Node port number
+  - port: 80
+    upstream: rancher_http
+    nodes:
+      node1: *node1_ip
+      node2: *node2_ip
+      node3: *node3_ip
+      node4: *node4_ip
+      node5: *node5_ip
+      node6: *node6_ip
+    nodeport: 80
+  - port: 443
+    upstream: rancher_https
+    nodes:
+      node1: *node1_ip
+      node2: *node2_ip
+      node3: *node3_ip
+      node4: *node4_ip
+      node5: *node5_ip
+      node6: *node6_ip
+    nodeport: 443
+
+rancher:
+  - name: rancher1                            # Rancher configuration
+    <<: *default_node                         # Include node anchor
+    ip: *node1_ip                             # Alias to Kubernetes node ip
+    namespace: cattle-system                  # Namespace for Rancher installation
+    repo: prime                               # Repository (stable, latest, prime)
+    certman: 1.14.1                           # Cert-manager version
+    version: 2.8.4                            # Rancher version
+    replica: 3                                # Number of replicas
+    hostname: 192.168.143.1.sslip.io          # Rancher hostname
+    password: admin                           # Bootstrap password
+
+kubeconfig:
+  - name: k3s_node1                          # Rancher configuration
+    <<: *default_node                        # Include node anchor
+    ip: *node1_ip                            # Alias to Kubernetes node ip
+    file: ~/.kube/kc_192.168.143.10          # Local filename 
+    merge: true                              # Merge kubeconfig
+    context: k3s_192.168.143.10              # Kubeconfig context
+    server: 192.168.143.10:6443              # Kubeconfig server/port
+    type: k3s                                # Cluster type

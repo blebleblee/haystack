@@ -1,0 +1,1187 @@
+#!/bin/bash
+set -e
+
+prog=${0##*/}
+source $(dirname "$(readlink -f "$0")")/functions.sh
+
+INSTALL_HARV=1
+
+function usage ()
+{
+    cat << EOF
+NAME
+    kvm-install-harv - Install virtual Harvester on a local KVM hypervisor.
+
+SYNOPSIS
+    $prog COMMAND [OPTIONS]
+
+DESCRIPTION
+    A bash wrapper around virt-install to build virtual machines running Harvester
+    on a local KVM hypervisor. You can run it as a normal user which will use
+    qemu:///session to connect locally to your KVM domains.
+
+COMMANDS
+    create      - create a new Harvester node
+    remove      - delete a Harvester node
+    attach-disk - create and attach disk device to a Harvester node
+    detach-disk - detach disk device from a Harvester node
+    attach-nvme - create and attach nvme device to a Harvester node (VM reboot required)
+    attach-nic  - create and attach network interface to a Harvester node
+    list        - list all nodes, running and stopped
+    help        - show this help or help for a subcommand
+EOF
+    exit 0
+}
+
+function usage_subcommand ()
+{
+    case "$1" in
+        create)
+            printf "NAME\n"
+            printf "    $prog create [COMMANDS] [OPTIONS] VMNAME\n"
+            printf "\n"
+            printf "DESCRIPTION\n"
+            printf "    Create a new Harvester node.\n"
+            printf "\n"
+            printf "COMMANDS\n"
+            printf "    help - show this help\n"
+            printf "\n"
+            printf "OPTIONS\n"
+            printf "    -a          Autostart             (default: false)\n"
+            printf "    -b          Bridge                (default: br0)\n"
+            printf "    -B          Use bonded NICs       (default: false)\n"
+            printf "    -c          Number of vCPUs       (default: 4)\n"
+            printf "    -C          SSL CA Certificate    (default: none)\n"
+            printf "    -d          Disk Size (GB)        (default: 250)\n"
+            printf "    -D          DNS Domain            (default: example.local)\n"
+            printf "    -f          CPU Model / Feature   (default: host-passthrough)\n"
+            printf "    -g          Graphics type         (default: spice)\n"
+            printf "    -G          Default Gateway       (default: dhcp)\n"
+            printf "    -h          Display help\n"
+            printf "    -H          NTP Server            (default: 192.168.200.1)\n"
+            printf "    -i          Management IP Address (default: 192.168.200.200)\n"
+            printf "    -I          IP Address/Netmask    (default: dhcp)\n"
+            printf "    -j          Join server FQDN      (default: none)\n" 
+            printf "    -J          Cluster Join Mode     (default: false)\n"
+            printf "    -k          SSH Public Key        (default: $HOME/.ssh/id_rsa.pub)\n"
+            printf "    -l          Location of Images    (default: $HOME/virt/images)\n"
+            printf "    -L          Location of VMs       (default: $HOME/virt/vms)\n"
+            printf "    -m          Memory Size (MB)      (default: 16384)\n"
+            printf "    -M          Mac Address           (default: auto-assigned)\n"
+            printf "    -N          NVMe Devices (1 or 2) (default: 0)\n"
+            printf "    -o          NVMe Disk Size (GB)   (default: 100)\n"
+            printf "    -p          Console port          (default: auto)\n"
+            printf "    -P          Proxy Config          (default: none)\n"
+            printf "    -r          Install role (v1.3)   (default: default)\n"
+            printf "    -R          Resolver              (default: dhcp)\n"
+            printf "    -s          SSL Public Cert       (default: none)\n"
+            printf "    -S          SSL Private Key       (default: none)\n"
+            printf "    -t          Harvester Version     (default: harv121)\n"
+            printf "    -T          Token                 (default: foo)\n"
+            printf "    -x          Skip checks           (default: false)\n"
+            printf "    -z          Zone Topology Label   (default: zone1)\n"
+            printf "    -y          Assume yes to prompts (default: false)\n"
+            printf "    -n          Assume no to prompts  (default: false)\n"
+            printf "    -v          Be verbose\n"
+            printf "\n"
+            printf "DISTRIBUTIONS\n"
+            printf "    NAME            DESCRIPTION                         LOGIN\n"
+            printf "    harv111         Harvester 1.1.1                     rancher\n"
+            printf "    harv112         Harvester 1.1.2                     rancher\n"
+            printf "    harv113         Harvester 1.1.3                     rancher\n"
+            printf "    harv120         Harvester 1.2.0                     rancher\n"
+            printf "    harv121         Harvester 1.2.1                     rancher\n"
+            printf "    harv122         Harvester 1.2.2                     rancher\n"
+            printf "    harv130         Harvester 1.3.0                     rancher\n"
+            printf "    harv131         Harvester 1.3.1                     rancher\n"            
+            printf "    harvmaster      Harvester Master Branch             rancher\n"
+            printf "\n"
+            printf "EXAMPLES\n"
+            printf "    $prog create foo\n"
+            printf "        Create VM with the default parameters: Harvester 1.2.1, 4 vCPU, 16GB RAM, 250GB\n"
+            printf "        disk capacity.\n"
+            printf "\n"
+            printf "    $prog create -c 8 -m 32768 -d 400 foo\n"
+            printf "        Create VM with custom parameters: 8 vCPUs, 32GB RAM, and 400GB disk capacity.\n"
+            printf "\n"
+            printf "    $prog create -I 192.168.200.202/23 -R 192.168.200.2 -G 192.168.200.1 foo\n"
+            printf "        Create VM with static network settings: IP address 192.168.200.202/23, DNS server 192.168.200.2\n"
+            printf "        and default gateway 192.168.200.1. All three parameters are required.\n"
+            printf "\n"
+            printf "    $prog create -J -B -i 192.168.201.201 -T topsecret foo\n"
+            printf "        Create VM with default settings and 2 NICs configured as a bond. Join the new node into an\n"
+            printf "        existing cluster using the token "topsecret" and management ip address 192.168.201.201\n"
+            printf "\n"
+            ;;
+        remove)
+            printf "NAME\n"
+            printf "    $prog remove [COMMANDS] VMNAME\n"
+            printf "\n"
+            printf "DESCRIPTION\n"
+            printf "    Destroys (stops) and undefines a Harvester node.  This also removes the\n"
+            printf "    associated storage pool.\n"
+            printf "\n"
+            printf "COMMANDS\n"
+            printf "    help - show this help\n"
+            printf "\n"
+            printf "OPTIONS\n"
+            printf "    -l          Location of Images  (default: $HOME/virt/images)\n"
+            printf "    -L          Location of VMs     (default: $HOME/virt/vms)\n"
+            printf "    -v          Be verbose\n"
+            printf "\n"
+            printf "EXAMPLE\n"
+            printf "    $prog remove foo\n"
+            printf "        Remove (destroy and undefine) a Harvester node.  WARNING: This will\n"
+            printf "        delete the Harvester node and any changes made inside it!\n"
+            ;;
+        attach-disk)
+            printf "NAME\n"
+            printf "    $prog attach-disk [OPTIONS] [COMMANDS] VMNAME\n"
+            printf "\n"
+            printf "DESCRIPTION\n"
+            printf "    Attaches new disk to a Harvester node.\n"
+            printf "\n"
+            printf "COMMANDS\n"
+            printf "    help - show this help\n"
+            printf "\n"
+            printf "OPTIONS\n"
+            printf "    -d SIZE     Disk size (GB)\n"
+            printf "    -f FORMAT   Disk image format       (default: qcow2)\n"
+            printf "    -s IMAGE    Source of disk device\n"
+            printf "    -t TARGET   Disk device target\n"
+            printf "\n"
+            printf "EXAMPLE\n"
+            printf "    $prog attach-disk -d 10 -s example-5g.qcow2 -t vdb foo\n"
+            printf "        Attach a 10GB disk device named example-5g.qcow2 to the foo node.\n"
+            ;;
+        detach-disk)
+            printf "NAME\n"
+            printf "    $prog detach-disk [OPTIONS] [COMMANDS] VMNAME\n"
+            printf "\n"
+            printf "DESCRIPTION\n"
+            printf "    Detaches disk from a Harvester node.\n"
+            printf "\n"
+            printf "COMMANDS\n"
+            printf "    help - show this help\n"
+            printf "\n"
+            printf "OPTIONS\n"
+            printf "    -s IMAGE    Source of disk device\n"
+            printf "\n"
+            printf "EXAMPLE\n"
+            printf "    $prog detach-disk -s example-vdb-5G.qcow2 foo\n"
+            printf "        Detach a 5GB disk device with source named example-vdb-5G.qcow2\n"
+            printf "        from the foo node.\n"
+            ;;
+        attach-nvme)
+            printf "NAME\n"
+            printf "    $prog attach-nvme [OPTIONS] [COMMANDS] VMNAME\n"
+            printf "\n"
+            printf "DESCRIPTION\n"
+            printf "    Attaches a new NVMe disk to a Harvester node. VM will be restarted.\n"
+            printf "\n"
+            printf "COMMANDS\n"
+            printf "    help - show this help\n"
+            printf "\n"
+            printf "OPTIONS\n"
+            printf "    -d SIZE     Disk size (GB)\n"
+            printf "    -f FORMAT   Disk image format       (default: qcow2)\n"
+            printf "\n"
+            printf "EXAMPLE\n"
+            printf "    $prog attach-nvme -d 20 -f qcow2 foo\n"
+            printf "        Attach 20GB NVMe device to the foo guest domain.\n"
+            ;;
+        attach-nic)
+            printf "NAME\n"
+            printf "    $prog detach-nic [OPTIONS] [COMMANDS] VMNAME\n"
+            printf "\n"
+            printf "DESCRIPTION\n"
+            printf "    Attaches new network interface to a Harvester node.\n"
+            printf "\n"
+            printf "COMMANDS\n"
+            printf "    help - show this help\n"
+            printf "\n"
+            printf "OPTIONS\n"
+            printf "    -m MODEL   Model of new network interface     (default: virtio)\n"
+            printf "    -b BRIDGE  Bridge                             (default: br0)\n"
+            printf "\n"
+            printf "EXAMPLE\n"
+            printf "    $prog attach-nic -t e1000 -b br-rancher foo\n"
+            printf "        Attach a new network interface of type e1000. Target bridge is br-rancher\n"
+            printf "        and Harvester node is foo.\n"
+            ;;
+        list)
+            printf "NAME\n"
+            printf "    $prog list\n"
+            printf "\n"
+            printf "DESCRIPTION\n"
+            printf "    Lists all running and stopped Harvester nodes.\n"
+            ;;
+        *)
+            printf "'$subcommand' is not a valid subcommand.\n"
+            exit 1
+            ;;
+    esac
+    exit 0
+}
+
+# Function to stop the web server
+stop_server() {
+    outputn "Stopping the web server..."
+    kill "${SERVER_PID}" &> /dev/null && ok
+}
+
+function fetch_images ()
+{
+    # Create image directory if it doesn't already exist
+    mkdir -p "${IMAGEDIR}"
+
+    # Set variables based on $DISTRO
+    # Use the command "osinfo-query os" to get the list of the accepted OS variants.
+    case "$DISTRO" in
+        harv111)
+            ISOFILE=harvester-v1.1.1-amd64.iso
+            KERNEL=harvester-v1.1.1-vmlinuz-amd64
+            INITRD=harvester-v1.1.1-initrd-amd64
+            OS_VARIANT="sle15sp3"
+            IMAGE_URL=https://releases.rancher.com/harvester/v1.1.1
+            DISK_FORMAT=qcow2
+            LOGIN_USER=rancher
+            ;;
+        harv112)
+            ISOFILE=harvester-v1.1.2-amd64.iso
+            KERNEL=harvester-v1.1.2-vmlinuz-amd64
+            INITRD=harvester-v1.1.2-initrd-amd64
+            OS_VARIANT="sle15sp4"
+            IMAGE_URL=https://releases.rancher.com/harvester/v1.1.2
+            DISK_FORMAT=qcow2
+            LOGIN_USER=rancher
+            ;;
+        harv113)
+            ISOFILE=harvester-v1.1.3-amd64.iso
+            KERNEL=harvester-v1.1.3-vmlinuz-amd64
+            INITRD=harvester-v1.1.3-initrd-amd64
+            OS_VARIANT="sle15sp4"
+            IMAGE_URL=https://releases.rancher.com/harvester/v1.1.3
+            DISK_FORMAT=qcow2
+            LOGIN_USER=rancher
+            ;;
+        harv120)
+            ISOFILE=harvester-v1.2.0-amd64.iso
+            KERNEL=harvester-v1.2.0-vmlinuz-amd64
+            INITRD=harvester-v1.2.0-initrd-amd64
+            OS_VARIANT="sle15sp5"
+            IMAGE_URL=https://releases.rancher.com/harvester/v1.2.0
+            DISK_FORMAT=qcow2
+            LOGIN_USER=rancher
+            ;;
+        harv121)
+            ISOFILE=harvester-v1.2.1-amd64.iso
+            KERNEL=harvester-v1.2.1-vmlinuz-amd64
+            INITRD=harvester-v1.2.1-initrd-amd64
+            OS_VARIANT="sle15sp5"
+            IMAGE_URL=https://releases.rancher.com/harvester/v1.2.1
+            DISK_FORMAT=qcow2
+            LOGIN_USER=rancher
+            ;;
+        harv122)
+            ISOFILE=harvester-v1.2.2-amd64.iso
+            KERNEL=harvester-v1.2.2-vmlinuz-amd64
+            INITRD=harvester-v1.2.2-initrd-amd64
+            OS_VARIANT="sle15sp5"
+            IMAGE_URL=https://releases.rancher.com/harvester/v1.2.2
+            DISK_FORMAT=qcow2
+            LOGIN_USER=rancher
+            ;;
+        harv130)
+            ISOFILE=harvester-v1.3.0-amd64.iso
+            KERNEL=harvester-v1.3.0-vmlinuz-amd64
+            INITRD=harvester-v1.3.0-initrd-amd64
+            OS_VARIANT="sle15sp5"
+            IMAGE_URL=https://releases.rancher.com/harvester/v1.3.0
+            DISK_FORMAT=qcow2
+            LOGIN_USER=rancher
+            ;;
+        harv131)
+            ISOFILE=harvester-v1.3.1-amd64.iso
+            KERNEL=harvester-v1.3.1-vmlinuz-amd64
+            INITRD=harvester-v1.3.1-initrd-amd64
+            OS_VARIANT="sle15sp5"
+            IMAGE_URL=https://releases.rancher.com/harvester/v1.3.1
+            DISK_FORMAT=qcow2
+            LOGIN_USER=rancher
+            ;;
+        harvmaster)
+            ISOFILE=harvester-master-amd64.iso
+            KERNEL=harvester-master-vmlinuz-amd64
+            INITRD=harvester-master-initrd-amd64
+            OS_VARIANT="sle15sp5"
+            IMAGE_URL=https://releases.rancher.com/harvester/master
+            DISK_FORMAT=qcow2
+            LOGIN_USER=rancher
+            ;;
+        *)
+            die "${DISTRO} not a supported OS.  Run 'kvm-install-harv create help'."
+            ;;
+    esac
+
+    for ARTIFACT in ${ISOFILE} ${KERNEL} ${INITRD};
+    do
+
+        if [ ! -f "${IMAGEDIR}"/"${ARTIFACT}" ]
+        then
+            set_wget
+            if [ -f "${IMAGEDIR}"/"${ARTIFACT}".part ]
+            then
+                CONTINUE="--continue"
+                output "Partial artifact found.  Resuming download"
+            else
+                CONTINUE=""
+                output "Artifact not found.  Downloading"
+            fi
+            ${WGET} \
+                ${CONTINUE} \
+                --directory-prefix "${IMAGEDIR}" \
+                --output-document="${IMAGEDIR}"/"${ARTIFACT}".part \
+                "${IMAGE_URL}"/"${ARTIFACT}" || \
+                die "Could not download artifact."
+
+            mv "${IMAGEDIR}"/"${ARTIFACT}".part "${IMAGEDIR}"/"${ARTIFACT}"
+        fi
+    done
+}
+
+function create_vm ()
+{
+    # Create image directory if it doesn't already exist
+    mkdir -p "${VMDIR}"
+    trap stop_server EXIT
+
+    # Bridge IP address
+    NET_BR=$(ip addr show "${BRIDGE}" | grep 'inet ' | grep -v '127.0.0.1' | awk '{print $2}' | cut -d '/' -f 1)
+
+    check_vmname_set
+
+    # Start clean
+    [ -d "${VMDIR}/${VMNAME}" ] && rm -rf "${VMDIR}"/"${VMNAME}"
+    mkdir -p "${VMDIR}"/"${VMNAME}"
+
+    pushd "${VMDIR}"/"${VMNAME}"
+
+    # Create log file
+    touch "${VMNAME}".log
+
+    cat > "${HARV_CONFIG}" << _EOF_
+################################################################
+#     Generated configuration file for kvm-install-harv.sh     #
+################################################################
+scheme_version: 1
+token: ${TOKEN}
+################################################################
+# OS configuration
+os:
+  ssh_authorized_keys:
+    - ${KEY}
+  password: 'password'
+  labels:
+    topology.kubernetes.io/zone: ${ZONE}
+  hostname: ${VMNAME}
+  modules:
+    - kvm
+    - vhost_net
+    - nvme
+# Write local files
+  write_files:
+################################################################
+# Example - secure ciphers in sshd:
+#    - encoding: ""
+#      content: |
+#         Ciphers                         chacha20-poly1305@openssh.com,aes256-gcm@openssh.com,aes256-ctr,aes192-ctr,aes128-gcm@openssh.com,aes128-ctr
+#         MACS                            hmac-sha2-512-etm@openssh.com,hmac-sha2-512,hmac-sha2-256-etm@openssh.com,hmac-sha2-256
+#         KexAlgorithms                   curve25519-sha256@libssh.org,curve25519-sha256,ecdh-sha2-nistp521,ecdh-sha2-nistp384,ecdh-sha2-nistp256,diffie-hellman-group-exchange-sha256,diffie-hellman-group14-sha256,diffie-hellman-group16-sha512,diffie-hellman-group18-sha512
+#         HostKeyAlgorithms               ssh-ed25519,ssh-ed25519-cert-v01@openssh.com,sk-ssh-ed25519@openssh.com,sk-ssh-ed25519-cert-v01@openssh.com,rsa-sha2-256,rsa-sha2-512,rsa-sha2-256-cert-v01@openssh.com,rsa-sha2-512-cert-v01@openssh.com
+#      owner: root
+#      path: /etc/ssh/sshd_config.d/secure-ciphers.conf
+#      rawfilepermissions: "0600"
+#
+# Example - customized sshd config:
+#    - encoding: ""
+#      content: |
+#         PermitRootLogin no
+#         AuthorizedKeysFile      .ssh/authorized_keys
+#         UsePAM yes
+#         X11Forwarding no
+#         Subsystem       sftp    /usr/lib/ssh/sftp-server
+#         AcceptEnv LANG LC_CTYPE LC_NUMERIC LC_TIME LC_COLLATE LC_MONETARY LC_MESSAGES
+#         AcceptEnv LC_PAPER LC_NAME LC_ADDRESS LC_TELEPHONE LC_MEASUREMENT
+#         AcceptEnv LC_IDENTIFICATION LC_ALL
+#         Include /etc/ssh/sshd_config.d/*.conf
+#      owner: root
+#      path: /etc/ssh/sshd_config
+#      permissions: "0640"
+################################################################
+_EOF_
+
+    # Proxy configuration
+    if [ ! -z "${NET_PROXY}"  ]; then cat >> "${HARV_CONFIG}" << _EOF_
+   - encoding: ""
+     content: |
+       HTTP_PROXY="http://${NET_PROXY}"
+       HTTPS_PROXY="http://${NET_PROXY}"
+       NO_PROXY="127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,.svc,.cluster.local,localhost,.${DNSDOMAIN}"
+     owner: root
+     path: /etc/default/rke2-server
+     permissions: "0700"
+   - encoding: ""
+     content: |
+       HTTP_PROXY="http://${NET_PROXY}"
+       HTTPS_PROXY="http://${NET_PROXY}"
+       NO_PROXY="127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,.svc,.cluster.local,localhost,.${DNSDOMAIN}"
+     owner: root
+     path: /etc/default/rke2-agent
+     permissions: "0700"
+  environment:
+    http_proxy: "http://${NET_PROXY}"
+    https_proxy: "http://${NET_PROXY}"
+    no_proxy: "127.0.0.0/8,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,.svc,.cluster.local,localhost,.${DNSDOMAIN}"
+_EOF_
+    fi
+
+    # NTP configuration
+    if [ ! -z "${NET_DNS}"  ]; then cat >> "${HARV_CONFIG}" << _EOF_
+  ntp_servers:
+    - ${NET_NTP}
+_EOF_
+    fi
+
+    # DNS
+    if [ ! -z "${NET_DNS}"  ]; then cat >> "${HARV_CONFIG}" << _EOF_
+  dns_nameservers:
+    - ${NET_DNS}
+_EOF_
+    fi
+
+    if [ -z "${JOIN_SERVER}"  ]; then
+      JOIN_SERVER="${VIP_IP}"
+    fi
+
+    # Join or create mode
+    if [[ "${JOIN_NODE}" -eq 1 ]]; then cat >> "${HARV_CONFIG}" << _EOF_
+server_url: "https://${JOIN_SERVER}:443"
+################################################################
+# Installation options
+install:
+  automatic: true
+  mode: join
+  management_interface:
+    interfaces:
+_EOF_
+    else
+        cat >> "${HARV_CONFIG}" << _EOF_
+################################################################
+# Install options
+install:
+  automatic: true
+  mode: create
+  management_interface:
+    interfaces:
+_EOF_
+    fi
+
+    # Bond config
+    if [[ "${BOND}" -eq 1 ]]; then cat >> "${HARV_CONFIG}" << _EOF_
+      - name: enp1s0
+      - name: enp2s0
+    bond_options:
+      miimon: "100"
+      mode: balance-tlb
+_EOF_
+    else
+        cat >> "${HARV_CONFIG}" << _EOF_
+      - name: enp1s0
+_EOF_
+    fi
+
+    # Static network config
+    if [ ! -z "${NET_IP}" ] && [ ! -z "${NET_GW}" ]; then
+        extract_subnet_mask "${NET_IP}"
+        cat >> "${HARV_CONFIG}" << _EOF_
+    method: static
+    ip: ${NET_ADDR}
+    subnet_mask: ${NET_MASK}
+    gateway: ${NET_GW}
+_EOF_
+    else
+        cat >> "${HARV_CONFIG}" << _EOF_
+    method: dhcp
+_EOF_
+    fi
+
+    # The rest of install configuration
+    cat >> "${HARV_CONFIG}" << _EOF_
+    default_route: false
+    mtu: 1500
+    vlanid: 0
+  vip: ${VIP_IP}
+  vip_mode: static
+  force_efi: false
+  device: /dev/vda
+  silent: false
+  iso_url: http://${NET_BR}:8000/${ISOFILE}
+  poweroff: false
+  no_format: false
+  debug: true
+  tty: tty1
+  force_gpt: true
+  force_mbr: false
+_EOF_
+
+    if [ "${SKIPCHECKS}" ] ; then
+cat >> "${HARV_CONFIG}" << _EOF_
+  skipchecks: true
+_EOF_
+    fi
+
+    if [ ! -z "${INSTALL_ROLE}" ] && [[ "${DISTRO}" == harv13* ]]; then
+cat >> "${HARV_CONFIG}" << _EOF_
+  role: ${INSTALL_ROLE}
+
+################################################################
+# System settings
+system_settings:
+  auto-disk-provision-paths: /dev/nvme*
+_EOF_
+    elif [[ "${DISTRO}" == harv13* ]]; then
+cat >> "${HARV_CONFIG}" << _EOF_
+  role: default
+
+################################################################
+# System settings
+system_settings:
+  auto-disk-provision-paths: /dev/nvme*
+_EOF_
+    else
+cat >> "${HARV_CONFIG}" << _EOF_
+  
+################################################################
+# System settings
+system_settings:
+  auto-disk-provision-paths: /dev/nvme*
+_EOF_
+    fi
+
+    if [ ! -z "${SSL_CA}" ] && [ ! -z "${SSL_CERT}" ] && [ ! -z "${SSL_KEY}" ]; then
+        for CHECK in ${SSL_CA} ${SSL_CERT} ${SSL_KEY}; do
+            if [ -f "${CHECK}" ]; then
+                outputn "File ${CHECK} found" && ok
+            fi
+        done
+        HARV_CA=$(sed ':a;N;$!ba;s/\n/\\n/g' "${SSL_CA}")
+        HARV_CERT=$(sed ':a;N;$!ba;s/\n/\\n/g' "${SSL_CERT}")
+        HARV_KEY=$(sed ':a;N;$!ba;s/\n/\\n/g' "${SSL_KEY}")
+        cat >> "${HARV_CONFIG}" << _EOF_
+# SSL Configuration
+  ssl-certificates: |-
+    {
+      "ca": "${HARV_CA}",
+      "publicCertificate": "${HARV_CERT}",
+      "privateKey": "${HARV_KEY}"
+    }
+_EOF_
+    fi
+
+    cat >> "${HARV_CONFIG}" << _EOF_
+# Example:
+#  cluster-registration-url:  #implement option
+#  containerd-registry: |-
+#    {
+#      "Mirrors": {
+#        "docker.io": {
+#          "Endpoints": [
+#            "https://registry.2464.cz"
+#          ],
+#          "Rewrites": null
+#        }
+#      },
+#      "Auths": null
+#    }
+# Example:
+#  ssl-parameters: |-
+#    {
+#      "protocols": "TLSv1.2 TLSv1.3",
+#      "ciphers": "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-ECDSA-CHACHA20-POLY1305"
+#    }
+_EOF_
+
+    DISK=${VMNAME}.qcow2
+
+    # Create new storage pool for new VM
+    run "Creating storage pool" \
+        virsh pool-create-as \
+        --name "${VMNAME}" \
+        --type dir \
+        --target "${VMDIR}"/"${VMNAME}" \
+        || die "Could not create storage pool."
+
+    # Add custom MAC Address if specified
+    NETWORK_PARAMS="$(join ',' \
+        $(param bridge "${BRIDGE}") \
+        $(param model "${NETWORK_MODEL}") \
+        $(param mac "${MACADDRESS}") \
+        ${NETWORK_EXTRA})"
+
+    # Assemble disk parameters.
+    DISK_PARAMS="$(join ',' \
+        "${DISK}" \
+        $(param format "${DISK_FORMAT}") \
+        $(param bus "${DISK_BUS}") \
+	    $(param size "${DISK_SIZE}") \
+        ${DISK_EXTRA})"
+
+    # Omit the --graphics option to auto-detect.
+    if [ "${GRAPHICS}" = 'auto' ]
+    then
+        GRAPHICS_PARAMS=""
+    else
+        GRAPHICS_PARAMS="$(join ',' \
+            "${GRAPHICS}" \
+            $(param port "${PORT}") \
+            $(param listen "${GRAPHICS_LISTEN}") \
+            ${GRAPHICS_EXTRA})"
+    fi
+
+    # Assemble install parameters.
+    INSTALL_PARAMS="$(join ',' \
+        $(param initrd "${IMAGEDIR}"/"${INITRD}") \
+        $(param kernel "${IMAGEDIR}"/"${KERNEL}") \
+        )"
+
+    # Assemble virt-install options.
+    NETWORK_OPTION="--network ${NETWORK_PARAMS}"
+    DISK_OPTION="--disk ${DISK_PARAMS}"
+    GRAPHICS_OPTION="--graphics ${GRAPHICS_PARAMS}"
+    ISO_OPTION="--disk path=${IMAGEDIR}/${ISOFILE},device=cdrom"
+
+    ln -s "${IMAGEDIR}"/"${ISOFILE}" "${VMDIR}"/"${VMNAME}"/"${ISOFILE}"
+
+    # Bond
+    if [[ "${BOND}" -eq 1 ]]
+    then
+        NETWORK2_PARAMS="$(join ',' \
+         $(param bridge "${BRIDGE}") \
+         $(param model "${NETWORK_MODEL}"))"
+        NETWORK2_OPTION=" --network ${NETWORK2_PARAMS}"
+        NETWORK_OPTION+=${NETWORK2_OPTION}
+    fi
+
+    # Create NVME disks
+    if [[ ${DISK_NVME} -ne 0 && ${DISK_NVME} -lt 3 ]]
+    then
+        for ((NVME=1; NVME<=${DISK_NVME}; NVME++))
+        do
+            outputn "Creating NVMe disk ${NVME} for node ${VMNAME}"
+            qemu-img create -f "${DISK_FORMAT}" -o size="${NVME_DISKSIZE}"G,preallocation=metadata \
+                "${VMDIR}"/"${VMNAME}"/"${VMNAME}"-nvme-${NVME}."${DISK_FORMAT}" &>> "${VMDIR}"/"${VMNAME}"/"${VMNAME}".log && ok
+            NVME_DRIVE_OPTION+=("--qemu-commandline=-drive file=${VMDIR}/${VMNAME}/${VMNAME}-nvme-${NVME}.${DISK_FORMAT},format=${DISK_FORMAT},if=none,id=NVME${NVME}")
+            NVME_DEVICE_OPTION+=("--qemu-commandline=-device nvme,drive=NVME${NVME},serial=nvme-${NVME},addr=03.$((5 + ${NVME}))")
+        done
+    fi
+
+    # ip= for static config and dhcp
+    if [ ! -z "${NET_IP}" ] && [ ! -z "${NET_GW}" ]
+    then
+        NET_CONF="ip=${NET_ADDR}::${NET_GW}:${NET_MASK}:${VMNAME}:enp1s0:off:${NET_DNS}"
+    else
+        NET_CONF="ip=:::::enp1s0:dhcp"
+    fi
+
+    if ! command -v python3 &> /dev/null; then
+        die "Python3 is not installed. Please install Python3 to run the HTTP server."
+    fi
+    output "Starting web server..."
+    #python -m SimpleHTTPServer &> /dev/null &
+    python3 -m http.server &> /dev/null &
+    SERVER_PID=$! || die "Could not start web server"
+
+    # Call virt-install to import the cloud image and create a new VM
+    run "Installing the domain" \
+        virt-install \
+        --name "${VMNAME}" \
+        --memory "${MEMORY}" \
+        --vcpus "${CPUS}" \
+        --cpu "${FEATURE}" \
+        ${DISK_OPTION} \
+        "${NVME_DRIVE_OPTION[@]}" \
+        "${NVME_DEVICE_OPTION[@]}" \
+        ${NETWORK_OPTION} \
+        ${ISO_OPTION} \
+        --install "${INSTALL_PARAMS}" \
+        --os-variant "${OS_VARIANT}" \
+        --extra-args='harvester.install.automatic=true root=live:CDLABEL=COS_LIVE rd.live.dir=/ rd.live.squashimg=rootfs.squashfs rd.cos.disable console=tty1 console=ttyS0 net.ifnames=1 '"${NET_CONF}"' harvester.install.config_url=http://'"${NET_BR}"':8000/harvester.conf' \
+        --noautoconsole \
+        ${GRAPHICS_OPTION} \
+        ${VIRT_INSTALL_EXTRA} \
+        --wait \
+        || die "Could not create domain with virt-install."
+
+    virsh dominfo "${VMNAME}" &>> "${VMNAME}".log
+
+    # Enable autostart if true
+    if $AUTOSTART
+    then
+        outputn "Enabling autostart"
+        virsh autostart \
+            --domain "${VMNAME}" > /dev/null 2>&1 \
+            && ok \
+            || die "Could not enable autostart."
+    fi
+
+    MAC=$(virsh dumpxml "${VMNAME}" | awk -F\' '/mac address/ {print $2}')
+    output "MAC address: ${MAC}"
+
+    TIMEOUT=200
+    START_TIME=$(date +%s)
+    if [ -f "/var/lib/libvirt/dnsmasq/${BRIDGE}.status" ]
+    then
+        outputn "Waiting for domain to get an IP address"
+        while true
+        do
+            IP=$(grep -B1 "${MAC}" /var/lib/libvirt/dnsmasq/"${BRIDGE}".status | head \
+                -n 1 | awk '{print $2}' | sed -e s/\"//g -e s/,//)
+            if [ "${IP}" = "" ]
+            then
+                sleep 1
+            else
+                ok
+                break
+            fi
+        done
+        printf "\n"
+        check_delete_known_host
+    else
+        while [[ $(virsh guestinfo "${VMNAME}" 2>&1) == *"error: Guest agent is not responding"* ]]
+        do
+            CURRENT_TIME=$(date +%s)
+            ELAPSED_TIME=$((CURRENT_TIME - START_TIME))
+            if [[ ${ELAPSED_TIME} -ge ${TIMEOUT} ]]; then
+                echo "Timeout reached. QEMU agent not responding."
+                break
+            fi
+            sleep  1
+        done
+
+        sleep 60        # Wait for networking
+        if [[ "${BOND}" -eq 1 ]]
+        then
+            IP=$(virsh guestinfo "${VMNAME}" --interface |awk -F': ' '/if.3.addr.0.addr/{print $2};')
+        else
+            IP=$(virsh guestinfo "${VMNAME}" --interface |awk -F': ' '/if.2.addr.0.addr/{print $2};')
+        fi
+
+        if [ "${IP}" = "" ]
+        then
+            output "Error getting IP address. Check your DHCP server or VM console"
+        else
+            output "IP address: ${IP}"
+            outputn "Checking node ping:" $(curl -k -s https://"$IP"/ping) && ok
+            check_delete_known_host
+        fi
+    fi
+    echo "==============================================================================="
+    output "SSH to ${VMNAME}: 'ssh ${LOGIN_USER}@${IP}' or 'ssh ${LOGIN_USER}@${VMNAME}'"
+    echo "==============================================================================="
+    CONSOLE=$(virsh domdisplay "${VMNAME}")
+    # Workaround because VNC port number shown by virsh domdisplay is offset from 5900
+    if [ "${GRAPHICS}" = 'vnc' ]
+    then
+        CONSOLE_NO_PORT=$(echo "$CONSOLE" | cut -d ':' -f 1,2 -)
+        CONSOLE_PORT=$(expr 5900 + $(echo "$CONSOLE" | cut -d ':' -f 3 -))
+        output "Console at ${CONSOLE_NO_PORT}:${CONSOLE_PORT}"
+    else
+        output "Console at ${CONSOLE}"
+    fi
+
+    popd
+}
+
+# Delete VM
+function remove ()
+{
+    while getopts ":l:L:hv" opt
+    do
+        case "$opt" in
+            l ) IMAGEDIR="${OPTARG}" ;;
+            L ) VMDIR="${OPTARG}" ;;
+            v ) VERBOSE=1 ;;
+            h ) usage ;;
+            * ) die "Unsupported option. Run 'kvm-install-vm help remove'." ;;
+        esac
+    done
+
+    shift $((OPTIND - 1))
+
+    if [ "$#" != 1 ]
+    then
+        printf "Please specify a single host to remove.\n"
+        printf "Run 'kvm-install-harv help remove' for usage.\n"
+        exit 1
+    else
+        VMNAME=$1
+    fi
+
+    delete_vm
+}
+
+function create ()
+{
+    # Set default variables
+    DISTRO="harv121"
+
+    # Parse command line arguments
+    while getopts ":b:c:C:d:D:f:g:H:G:i:I:j:k:l:L:m:M:N:o:p:P:r:R:s:S:t:T:z:aBJxhynv" opt
+    do
+        case "$opt" in
+            a ) AUTOSTART="${OPTARG}" ;;
+            b ) BRIDGE="${OPTARG}" ;;
+            B ) BOND=1 ;;
+            c ) CPUS="${OPTARG}" ;;
+            C ) SSL_CA="${OPTARG}" ;;
+            d ) DISK_SIZE="${OPTARG}" ;;
+            D ) DNSDOMAIN="${OPTARG}" ;;
+            f ) FEATURE="${OPTARG}" ;;
+            g ) GRAPHICS="${OPTARG}" ;;
+            G ) NET_GW="${OPTARG}" ;;
+            H ) NET_NTP="${OPTARG}" ;;
+            i ) VIP_IP="${OPTARG}" ;;
+            I ) NET_IP="${OPTARG}" ;;
+            j ) JOIN_SERVER="${OPTARG}" ;;
+            J ) JOIN=1 ;;
+            k ) PUBKEY="${OPTARG}" ;;
+            l ) IMAGEDIR="${OPTARG}" ;;
+            L ) VMDIR="${OPTARG}" ;;
+            m ) MEMORY="${OPTARG}" ;;
+            M ) MACADDRESS="${OPTARG}" ;;
+            N ) DISK_NVME="${OPTARG}" ;;
+            o ) NVME_DISKSIZE="${OPTARG}" ;;
+            p ) PORT="${OPTARG}" ;;
+            P ) NET_PROXY="${OPTARG}" ;;
+            r ) INSTALL_ROLE="${OPTARG}" ;;
+            R ) NET_DNS="${OPTARG}" ;;
+            s ) SSL_CERT="${OPTARG}" ;;
+            S ) SSL_KEY="${OPTARG}" ;;
+            t ) DISTRO="${OPTARG}" ;;
+            T ) TOKEN="${OPTARG}" ;;
+            z ) ZONE="${OPTARG}" ;;
+            x ) SKIPCHECKS=1 ;;
+            y ) ASSUME_YES=1 ;;
+            n ) ASSUME_NO=1 ;;
+            v ) VERBOSE=1 ;;
+            h ) usage ;;
+            * ) die "Unsupported option. Run 'kvm-install-harv help create'." ;;
+        esac
+    done
+
+    shift $((OPTIND - 1))
+
+    # Yes (-y) and No (-n) are mutually exclusive.
+    if [[ "${ASSUME_YES}" -eq 1 ]] && [[ "${ASSUME_NO}" -eq 1 ]]
+    then
+        printf "Please specify only one of -y or -n flags.\n"
+        exit 1
+    fi
+
+    if [[ "${JOIN}" -eq 1 ]]
+    then
+        if  [[ -z "${TOKEN}" ]] && [[ -z "${VIP_IP}" ]]
+        then
+            printf "Please specify token and management IP when using -J for joining the cluster.\n"
+            printf "Run 'kvm-install-harv help create' for usage.\n"
+            exit 1
+        else
+            JOIN_NODE=1
+        fi
+    else
+        JOIN_NODE=0
+    fi
+
+    # After all options are processed, make sure only one variable is left (vmname)
+    if [ "$#" != 1 ]
+    then
+        printf "Please specify a single host to create.\n"
+        printf "Run 'kvm-install-harv help create' for usage.\n"
+        exit 1
+    else
+        VMNAME=$1
+    fi
+
+    # Set the harvester config file
+    HARV_CONFIG=harvester.conf
+
+    # Check for ssh key
+    check_ssh_key
+
+    # Download artifacts
+    fetch_images
+
+    # Verify the osinfo-db is up to date.
+    check_os_variant
+
+    # Check if domain already exists
+    domain_exists "${VMNAME}"
+
+    if [ "${DOMAIN_EXISTS}" -eq 1 ]; then
+        echo -n "[WARNING] ${VMNAME} already exists.  Do you want to overwrite ${VMNAME} [y/N]? "
+        if [ "${ASSUME_YES}" -eq 1 ]; then
+            REPLY="y"
+            echo $REPLY
+        elif [ "${ASSUME_NO}" -eq 1 ]; then
+            REPLY="n"
+            echo $REPLY
+        else
+            read -r
+        fi
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            delete_vm
+        else
+            echo -e "\nNot overwriting ${VMNAME}. Exiting..."
+            exit 1
+        fi
+    fi
+
+    # Finally, create requested VM
+    create_vm
+}
+
+function attach-disk ()
+{
+    while getopts ":d:f:s:t:h" opt
+    do
+        case "$opt" in
+            d ) DISKSIZE="${OPTARG}G" ;;
+            f ) DISK_FORMAT="${OPTARG}" ;; 
+            s ) SOURCE="${OPTARG}" ;;
+            t ) TARGET="${OPTARG}" ;;
+            h ) usage ;;
+            * ) die "Unsupported option. Run 'kvm-install-harv help attach-disk'." ;;
+        esac
+    done
+
+    shift $((OPTIND - 1))
+
+    [ ! -z "${TARGET}" ] || die "You must specify a target device, for e.g. '-t vdb'"
+    [ ! -z "${DISKSIZE}" ] || die "You must specify a size (in GB) for the new device, for e.g. '-d 5'"
+
+    if [ "$#" != 1 ]
+    then
+        printf "Please specify a single node to attach a disk to.\n"
+        printf "Run 'kvm-install-harv help attach-disk' for usage.\n"
+        exit 1
+    else
+        # Set variables
+        VMNAME=$1
+        # Directory to create attached disk (Checks both images an vms directories for backward compatibility!)
+        [[ -d ${VMDIR}/${VMNAME} ]] && DISKDIR=${VMDIR}/${VMNAME} || DISKDIR=${IMAGEDIR}/${VMNAME}
+        DISKNAME=${VMNAME}-${TARGET}-${DISKSIZE}.${DISK_FORMAT}
+
+        if [ ! -f "${DISKDIR}/${DISKNAME}" ]
+        then
+            outputn "Creating new '${TARGET}' disk image for domain ${VMNAME}"
+            (qemu-img create -f "${DISK_FORMAT}" -o size="${DISKSIZE}",preallocation=metadata \
+                "${DISKDIR}"/"${DISKNAME}" &>> "${VMDIR}"/"${VMNAME}"/"${VMNAME}".log  && ok ) && \
+
+            outputn "Attaching ${DISKNAME} to domain ${VMNAME}"
+            (virsh attach-disk "${VMNAME}" \
+                    --source "$DISKDIR"/"${DISKNAME}" \
+                    --target "${TARGET}" \
+                    --subdriver "${DISK_FORMAT}" \
+                    --cache none \
+                    --persistent &>> "${VMDIR}"/"${VMNAME}"/"${VMNAME}".log && ok ) \
+                || die "Could not attach disk."
+        else
+            die "Target ${TARGET} is already created or in use."
+        fi
+    fi
+}
+
+function detach-disk ()
+{
+    while getopts ":s:h" opt
+    do
+        case "$opt" in
+            s ) DISKNAME="${OPTARG}" ;;
+            h ) usage ;;
+            * ) die "Unsupported option. Run 'kvm-install-harv help detach-disk'." ;;
+        esac
+    done
+
+    shift $((OPTIND - 1))
+
+    [ ! -z "${DISKNAME}" ] || die "You must specify a disk source to detach, for e.g. ${VMNAME}-vdb-5G.qcow2'"
+
+    if [ "$#" != 1 ]
+    then
+        printf "Please specify a single node to detach a disk from.\n"
+        printf "Run 'kvm-install-harv help detach-disk' for usage.\n"
+        exit 1
+    else
+        # Set variables
+        VMNAME=$1
+
+        if [ -f "${VMDIR}/${VMNAME}/${DISKNAME}" ]
+        then
+            outputn "Detaching ${DISKNAME} from domain ${VMNAME}"
+            (virsh detach-disk --domain "${VMNAME}" \
+                "${VMDIR}"/"${VMNAME}"/"${DISKNAME}" --config &>> "${VMDIR}"/"${VMNAME}"/"${VMNAME}".log && ok ) \
+                || die "Could not detach disk."
+        else
+            die "Target ${TARGET} is already detached or in use."
+        fi
+    fi
+}
+
+function attach-nvme ()
+{
+    while getopts ":d:f:h" opt
+    do
+        case "$opt" in
+            d ) DISKSIZE="${OPTARG}G" ;;
+            f ) DISK_FORMAT="${OPTARG}" ;;
+            h ) usage ;;
+            * ) die "Unsupported option. Run 'kvm-install-harv help attach-nvme'." ;;
+        esac
+    done
+
+    shift $((OPTIND - 1))
+
+    [ ! -z "${DISKSIZE}" ] || die "You must specify a size (in GB) for the new device, for e.g. '-d 5'"
+
+    if [ "$#" != 1 ]
+    then
+        printf "Please specify a single host to attach a NVMe disk to.\n"
+        printf "Run 'kvm-install-harv help attach-nvme' for usage.\n"
+        exit 1
+    else
+        VMNAME=$1
+
+        # Check if addr 03.6 and 03.7 exist
+        ADDR=$(virsh dumpxml "${VMNAME}" | grep -oP "<qemu:arg value='nvme[^>]*addr=\K03.[67]")
+        if [[ $(echo "${ADDR}" | wc -l) -eq 2 ]]; then
+            die "All addresses occcupied, cannot attach nvme."
+            exit 1
+        elif [[ $(echo "${ADDR}" | wc -l) -eq 1 && ${ADDR} == "03.6" ]]; then
+            NVMEDRV="NVME2"
+            ADDR="03.7"
+            NVMESN="nvme-2"
+        else
+            NVMEDRV="NVME1"
+            ADDR="03.6"
+            NVMESN="nvme-1"
+        fi
+
+        # Directory to create attached disk (Checks both images an vms directories for backward compatibility!)
+        [[ -d ${VMDIR}/${VMNAME} ]] && DISKDIR=${VMDIR}/${VMNAME} || DISKDIR=${IMAGEDIR}/${VMNAME}
+        DISKNAME=${VMNAME}-nvme-${DISKSIZE}.${DISK_FORMAT}
+
+        if [ ! -f "${DISKDIR}/${DISKNAME}" ]
+        then
+            outputn "Creating new NVMe disk image for domain ${VMNAME}"
+            (qemu-img create -f "${DISK_FORMAT}" -o size="$DISKSIZE",preallocation=metadata \
+                "${DISKDIR}"/"${DISKNAME}" &>> "${VMDIR}"/"${VMNAME}"/"${VMNAME}".log && ok ) && \
+
+            outputn "Attaching ${DISKNAME} to domain ${VMNAME}"
+            (virt-xml "${VMNAME}" --edit --qemu-commandline="-drive file=${DISKDIR}/${DISKNAME},format=${DISK_FORMAT},if=none,id=${NVMEDRV}" &>> "${VMDIR}"/"${VMNAME}"/"${VMNAME}".log && \
+                virt-xml "${VMNAME}" --edit --qemu-commandline="-device nvme,drive=${NVMEDRV},serial=${NVMESN},addr=${ADDR}" &>> "${VMDIR}"/"${VMNAME}"/"${VMNAME}".log && ok ) \
+
+            outputn "Rebooting the node ${VMNAME}"
+            (virsh shutdown "${VMNAME}" &>> "${VMDIR}"/"${VMNAME}"/"${VMNAME}".log && \
+                    # Wait for the VM to shut down
+                while true; do
+                    VM_STATE=$(virsh domstate "${VMNAME}")
+                    if [ "${VM_STATE}" == "shut off" ]; then
+                        break
+                    fi
+                    sleep 1
+                done && \
+                virsh start "${VMNAME}" &>> "${VMDIR}"/"${VMNAME}"/"${VMNAME}".log && ok ) \
+                || die "Could not attach disk."
+        else
+            die "Target NVMe disk is already created or in use."
+        fi
+    fi
+}
+
+function attach-nic ()
+{
+    while getopts ":m:b:h" opt
+    do
+        case "$opt" in
+            m ) NETWORK_MODEL="${OPTARG}" ;;
+            b ) BRIDGE="${OPTARG}" ;;
+            h ) usage ;;
+            * ) die "Unsupported option. Run 'kvm-install-harv help attach-nic'." ;;
+        esac
+    done
+
+    shift $((OPTIND - 1))
+
+    if [ "$#" != 1 ]
+    then
+        printf "Please specify a single host to attach an interface to.\n"
+        printf "Run 'kvm-install-harv help attach-nic' for usage.\n"
+        exit 1
+    else
+        # Set variables
+        VMNAME=$1
+
+        outputn "Attaching new interface to a node ${VMNAME}"
+        (virsh attach-interface "${VMNAME}" \
+                --type bridge \
+                --model "${NETWORK_MODEL}" \
+                --source "${BRIDGE}" \
+                --config \
+                --live &>> "${VMDIR}"/"${VMNAME}"/"${VMNAME}".log && ok ) \
+            || die "Could not attach interface."
+
+    fi
+}
+
+#--------------------------------------------------
+# Main
+#--------------------------------------------------
+
+subcommand="${1:-none}"
+[[ "${subcommand}" != "none" ]] && shift
+
+case "${subcommand}" in
+    none)
+        usage
+        ;;
+    help)
+        if [[ "${1:-none}" == "none" ]]; then
+            usage
+        elif [[ "$1" =~ ^create$|^remove$|^list$|^attach-disk$|^detach-disk$|^attach-nvme$|^attach-nic$ ]]; then
+            usage_subcommand "$1"
+        else
+            printf "'$1' is not a valid subcommand.\n\n"
+            usage
+        fi
+        ;;
+    list)
+        virsh list --all
+        exit 0
+        ;;
+    create|remove|attach-disk|detach-disk|attach-nvme|attach-nic)
+        if [[ "${1:-none}" == "none" ]]; then
+            usage_subcommand "${subcommand}"
+        elif [[ "$1" =~ ^help$ ]]; then
+            usage_subcommand "${subcommand}"
+        else
+            set_defaults
+            set_custom_defaults
+            "${subcommand}" "$@"
+            exit $?
+        fi
+        ;;
+    *)
+        die "'${subcommand}' is not a valid subcommand.  See 'kvm-install-harv help' for a list of subcommands."
+        ;;
+esac

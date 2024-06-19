@@ -1,0 +1,282 @@
+#!/bin/bash
+set -e
+
+prog=${0##*/}
+source $(dirname "$(readlink -f "$0")")/functions.sh
+
+function usage ()
+{
+    cat << EOF
+NAME
+    install-rancher - Install Rancher on a kubernetes cluster.
+
+SYNOPSIS
+    $prog COMMAND [OPTIONS]
+
+DESCRIPTION
+    A bash script to install and remove Rancher. 
+
+COMMANDS
+    create      - set-up a new Rancher
+    remove      - delete Rancher installation
+    help        - show this help or help for a subcommand
+EOF
+    exit 0
+}
+
+function usage_subcommand ()
+{
+    case "$1" in
+        create)
+            printf "NAME\n"
+            printf "    $prog create [COMMANDS] [OPTIONS] HOST\n"
+            printf "\n"
+            printf "DESCRIPTION\n"
+            printf "    Set-up a new Rancher.\n"
+            printf "\n"
+            printf "COMMANDS\n"
+            printf "    help - show this help\n"
+            printf "\n"
+            printf "OPTIONS\n"
+            printf "    -a          Enable auditlog       (default: false)\n"
+            printf "    -c          Cert-manager version  (default: 1.14.1)\n"
+            printf "    -h          Display help\n"
+            printf "    -H          Set Rancher hostname\n"
+            printf "    -k          SSH Private Key       (default: $HOME/.ssh/id_rsa)\n"
+            printf "    -n          Namespace             (default: cattle-system)\n"
+            printf "    -p          Bootstrap password    (default: admin)\n"
+            printf "    -r          Chart repository      (default: prime)\n"
+            printf "    -R          Replica count         (default: 3)\n"
+            printf "    -u          SSH user              (default: sles)\n"
+            printf "    -V          Rancher version       (default: 2.7.13)\n"
+            printf "\n"
+            printf "EXAMPLES\n"
+            printf "    $prog create 192.168.200.201\n"
+            printf "        Set up a new Rancher installation on a Kubernetes node 192.168.200.201 with default settings.\n"
+            printf "\n"
+            printf "    $prog create -H 192.168.200.200.sslip.io -p linux -r stable -R 1 -V 2.8.4 192.168.200.202\n"
+            printf "        Set up a new Rancher installation with hostname 192.168.200.200.sslip.io and bootstrap password linux.\n"
+            printf "        Use \"stable\" Rancher chart repository. Run 1 replica and version v2.8.4.\n"
+            printf "\n"
+            printf "    $prog create -d -r latest -H lb.example.local -u sles -a 192.168.200.203\n"
+            printf "        Set up a new Rancher installation with hostname lb.example.local. Enable audit log and debug mode.\n"
+            printf "        Use repository \"latest\" and VM user \"sles\".\n"
+            printf "\n"
+            ;;
+        remove)
+            printf "NAME\n"
+            printf "    $prog remove [COMMANDS] HOST\n"
+            printf "\n"
+            printf "DESCRIPTION\n"
+            printf "    Uninstalls Rancher completely.\n"
+            printf "\n"
+            printf "COMMANDS\n"
+            printf "    help - show this help\n"
+            printf "\n"
+            printf "OPTIONS\n"
+            printf "    -h          Display help\n"
+            printf "    -k          SSH Private Key       (default: $HOME/.ssh/id_rsa)\n"
+            printf "    -n          Namespace             (default: cattle-system)\n"
+            printf "    -r          Chart repository      (default: prime)\n"
+            printf "    -u          SSH user              (default: sles)\n"
+            printf "\n"
+            printf "EXAMPLE\n"
+            printf "    $prog remove -u sles 192.168.200.201\n"
+            printf "        Remove Rancher from a Kubernetes node 192.168.200.201. Use \"sles\" as user for ssh.\n"
+            ;;
+        *)
+            printf "'$subcommand' is not a valid subcommand.\n"
+            exit 1
+            ;;
+    esac
+    exit 0
+}
+
+function prepare_ssh_payload() {
+
+    if [[ $RANCHER_REPO == *"stable"* ]]; then
+        RANCHER_URL="https://releases.rancher.com/server-charts/stable"
+    elif [[ $RANCHER_REPO == *"latest"* ]]; then
+        RANCHER_URL="https://releases.rancher.com/server-charts/latest"
+    elif [[ $RANCHER_REPO == *"prime"* ]]; then
+        RANCHER_URL="https://charts.rancher.com/server-charts/prime"
+    else 
+       die "Invalid Rancher repository!"
+    fi
+
+    if [ "${RANCHER_AUDIT}" -eq 1 ]; then
+      RANCHER_AUDIT="--set auditLog.level=1 "
+    else
+      RANCHER_AUDIT=""
+    fi
+
+    # Create the payload
+    cat <<EOF
+
+if ! command -v helm >/dev/null 2>&1; then
+    echo "- Helm not found, installing..."
+    curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+fi
+
+echo "- Adding Rancher repository..."
+helm repo add rancher-${RANCHER_REPO} ${RANCHER_URL}
+
+TIMEOUT=180
+INTERVAL=15
+ELAPSED=0
+
+echo "- Checking if all Kubernetes nodes are ready..."
+
+while [ \$ELAPSED -lt \$TIMEOUT ]; do
+  # Get the status of all nodes
+  NODES_STATUS=\$(kubectl get nodes --no-headers | awk '{print \$2}')
+
+  # Check if all nodes are in 'Ready' state
+  ALL_READY=true
+  for STATUS in \$NODES_STATUS; do
+    if [ "\$STATUS" != "Ready" ]; then
+      ALL_READY=false
+      break
+    fi
+  done
+
+  if [ "\$ALL_READY" = true ]; then
+    echo "- All nodes are ready."
+    
+    echo "- Creating namespace ${RANCHER_NS}..."
+    kubectl create namespace ${RANCHER_NS}
+    echo "- Installing cert-manager CRDs..."
+    kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v${RANCHER_CERTMAN}/cert-manager.crds.yaml
+    
+    echo "- Installing cert-manager..."
+    helm repo add jetstack https://charts.jetstack.io
+    helm repo update
+    helm install cert-manager jetstack/cert-manager \
+      --namespace cert-manager \
+      --create-namespace \
+      --version ${RANCHER_CERTMAN}
+    
+    echo "- Installing Rancher..."
+    helm install rancher rancher-${RANCHER_REPO}/rancher \
+      --namespace ${RANCHER_NS} \
+      --set hostname=${RANCHER_HOSTNAME} \
+      --set replicas=${RANCHER_REPLICA} \
+      --set bootstrapPassword=${RANCHER_PW} \
+      --version ${RANCHER_VERSION} \
+      ${RANCHER_AUDIT}
+
+    exit 0
+  else
+    echo "- Not all nodes are ready yet. Retrying in \$INTERVAL seconds..."
+    sleep \$INTERVAL
+    ELAPSED=\$((ELAPSED + INTERVAL))
+  fi
+done
+
+echo "- Timeout reached. Exiting due to nodes not being ready."
+exit 1
+
+EOF
+}
+
+
+function remove ()
+{
+    while getopts ":k:n:u:h" opt
+    do
+        case "$opt" in
+            k ) PRIVKEY="${OPTARG}" ;;
+            n ) RANCHER_NS="${OPTARG}" ;;
+            u ) LOGIN_USER="${OPTARG}" ;;
+            h ) usage ;;
+            * ) die "Unsupported option. Run 'install-rke2 help remove'." ;;
+        esac
+    done
+
+    shift $((OPTIND - 1))
+
+    if [ "$#" != 1 ]
+    then
+        printf "Please specify a single host to remove.\n"
+        printf "Run 'install-rancher help remove' for usage.\n"
+        exit 1
+    else
+        VMNAME=$1
+    fi
+
+    ssh -o StrictHostKeyChecking=no -i "${PRIVKEY}" "${LOGIN_USER}"@"${VMNAME}" "helm uninstall rancher --namespace ${RANCHER_NS}"
+}
+
+function create ()
+{
+    while getopts ":c:H:k:n:p:r:R:u:V:ah" opt
+    do
+        case "$opt" in
+            a ) RANCHER_AUDIT=1 ;;
+            c ) RANCHER_CERTMAN="${OPTARG}" ;;
+            H ) RANCHER_HOSTNAME="${OPTARG}" ;;
+            k ) PRIVKEY="${OPTARG}" ;;
+            n ) RANCHER_NS="${OPTARG}" ;;
+            p ) RANCHER_PW="${OPTARG}" ;;
+            r ) RANCHER_REPO="${OPTARG}" ;;
+            R ) RANCHER_REPLICA="${OPTARG}" ;;
+            u ) LOGIN_USER="${OPTARG}" ;;
+            V ) RANCHER_VERSION="${OPTARG}" ;;
+            h ) usage ;;
+            * ) die "Unsupported option. Run 'install-rke2 help create'." ;;
+        esac
+    done
+
+    shift $((OPTIND - 1))
+
+    # After all options are processed, make sure only one variable is left (vmname)
+    if [ "$#" != 1 ]
+    then
+        printf "Please specify a single host to create.\n"
+        printf "Run 'install-rancher help create' for usage.\n"
+        exit 1
+    else
+        VMNAME=$1
+    fi
+
+    ssh -o StrictHostKeyChecking=no -i "${PRIVKEY}" "${LOGIN_USER}"@"${VMNAME}" 2>/dev/null <<< "$(prepare_ssh_payload)"
+}
+
+
+#--------------------------------------------------
+# Main
+#--------------------------------------------------
+
+subcommand="${1:-none}"
+[[ "${subcommand}" != "none" ]] && shift
+
+case "${subcommand}" in
+    none)
+        usage
+        ;;
+    help)
+        if [[ "${1:-none}" == "none" ]]; then
+            usage
+        elif [[ "$1" =~ ^create$|^remove$ ]]; then
+            usage_subcommand "$1"
+        else
+            printf "'$1' is not a valid subcommand.\n\n"
+            usage
+        fi
+        ;;
+    create|remove)
+        if [[ "${1:-none}" == "none" ]]; then
+            usage_subcommand "${subcommand}"
+        elif [[ "$1" =~ ^help$ ]]; then
+            usage_subcommand "${subcommand}"
+        else
+            set_defaults
+            set_custom_defaults
+            "${subcommand}" "$@"
+            exit $?
+        fi
+        ;;
+    *)
+        die "'${subcommand}' is not a valid subcommand.  See 'install-rancher help' for a list of subcommands."
+        ;;
+esac

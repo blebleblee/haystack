@@ -1,0 +1,215 @@
+## .kivrc - Set custom defaults for kvm-install-*
+
+# Autostart
+#AUTOSTART=false
+
+# Number of virtual CPUs
+#CPUS=2
+
+# Use host cpu features to the guest
+#FEATURE=host-passthrough
+
+# Amount of RAM in MB
+#MEMORY=4096
+
+# Disk Size in GB
+#DISK_SIZE=20
+
+# DNS domain
+#DNSDOMAIN=example.local
+
+# Graphics type
+#GRAPHICS=spice
+
+# Console port
+#PORT=-1
+
+# Resize disk (boolean)
+#RESIZE_DISK=false
+
+# Directory to store images
+#IMAGEDIR=${HOME}/virt/images
+
+# Directory to store vms
+#VMDIR=${HOME}/virt/vms
+
+# Hypervisor bridge
+#BRIDGE=br0
+
+# SSH public key
+#PUBKEY=${HOME}/.ssh/id_rsa.pub
+
+# Distribution
+#DISTRO=sles155
+
+# MAC Address
+#MACADDRESS=
+
+# Timezone
+#TIMEZONE=UTC
+
+# User
+#ADDITIONAL_USER=${USER}
+
+# Verbosity
+#VERBOSE=0
+
+#
+# Advanced virt-install options.
+#
+# You probably will not need to change any of the following
+# unless you are running a non-KVM hypervisor, such as Xen.
+#
+
+# The --network model type.
+#NETWORK_MODEL=virtio
+
+# Additional --network parameters.
+#NETWORK_EXTRA=""
+
+# The --disk bus type. Specify none to auto-detect.
+#DISK_BUS=virtio
+
+# Additional --disk parameters.
+#DISK_EXTRA=""
+
+# Additional CI ISO --disk parameters.
+#CI_ISO_EXTRA=""
+
+# The --graphics listen parameter.
+#GRAPHICS_LISTEN=0.0.0.0
+
+# Additional --graphics parameters.
+#GRAPHICS_EXTRA=""
+
+# Additional virt-install options.
+#VIRT_INSTALL_EXTRA=""
+
+#
+# Network configuration defaults
+#
+
+# IP address and network mask of the first interface
+#NET_IP="192.168.201.221/23"
+
+# Default network gateway
+#NET_GW="192.168.200.1"
+
+# DNS resolver
+#NET_DNS="192.168.200.2"
+
+# NTP server
+#NET_NTP="192.168.200.2"
+
+# Use bond in Harvester
+#BOND=false
+
+# Harvester VIP
+#VIP_IP="192.168.201.201"
+
+# Harvester join mode
+#JOIN=0
+
+# Join server FQDN
+#JOIN_SERVER=""
+
+# Number of NVME disk on Harvester node
+#DISK_NVME=2
+
+# Address of proxy server (Harvester only)
+#NET_PROXY=https://proxy.local
+
+# Token
+#TOKEN="topssecretbottomsecret"
+
+# Default topology zone
+#ZONE=zone1
+
+# Default NVMe disk size
+# NVME_DISKSIZE="100"
+
+
+#
+# SSL Configuration
+#
+
+# SSL CA Certificate file
+#SSL_CA=/root/certs/cacert.crt
+
+# SSL public certificate
+#SSL_CERT=/root/certs/cert.crt
+
+# SSL private key
+#SSL_KEY=/root/certs/secret.key
+
+#
+# Loadbalancer Configuration
+#
+
+# Nginx config file
+# NGINX_CONF="/etc/nginx/nginx.conf"
+
+# Maximum fails for a server
+# MAX_FAILS="3"
+
+# Timeout failure
+# FAIL_TIMEOUT="5s"
+
+
+#
+# RMT Configuration
+#
+
+# Autoyast/SLES configuration defaults
+# RMT="http://cml.2464.cz"
+
+# RMT server fingerprint
+# check: openssl s_client -connect cml.2464.cz:443 < /dev/null 2>/dev/null | openssl x509 -fingerprint  -sha1 -noout -in /dev/stdin
+# RMTFINGER="3C:6E:A5:C7:46:11:84:88:1B:1A:46:DF:3A:46:7B:D8:AD:82:85:21"
+
+
+#
+# K8s Configuration
+#
+
+# Directory for storing default kubeconfig
+# KUBEDIR="${HOME}/.kube"
+
+# Default kubeconfig filename
+# KUBECONFIG="${KUBEDIR}/config"
+
+# Default type of cluster (rke1/rke2/k3s/k8s)
+# KUBETYPE=""
+
+# CNI Plugin default
+# CNI="canal"
+
+# Stable/testing channel
+# CHANNEL="stable"
+
+# Debug mode off
+# DEBUG=0
+
+# Type server or agent/worker
+# SRVTYPE="server"
+
+# Kubeconfig file mode
+# MODE="777"
+
+# CIS profile for RKE2
+# PROFILE=""
+
+# SSH Private key
+# PRIVKEY="${HOME}/.ssh/id_rsa"
+
+# K3s cluster-init mode
+# CLUSTER_INIT=0
+
+# Default RKE version
+# RKE_VERSION="v1.5.6"
+
+# SSH login user
+# LOGIN_USER="sles"
+
+# Merge kubeconfig to main configuration
+# MERGE=0

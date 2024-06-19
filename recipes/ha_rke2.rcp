@@ -1,0 +1,134 @@
+recipe_desc: |
+  Example RKE2 HA recipe. 3 control plane and 3 worker nodes.
+  Requirements: CPU: 12, Memory: 24GB, Disk: 120GB
+  Versions: RKE2 1.26.13+rke2r1
+  Network: 192.168.143.1/24 (br-rancher)
+
+default_network: &default_network
+  gw: 192.168.143.1
+  dns: 192.168.200.2
+  bridge: br-rancher
+  domain: sslip.io
+  netmask: 24
+
+default_vm: &default_vm
+  vcpu: 2
+  disk: 20
+  memory: 4096
+
+default_kubernetes: &default_kubernetes
+  version: v1.26.13+rke2r1
+  channel: stable
+  cni: calico
+  debug: true
+  selinux: false
+  privkey: /root/.ssh/id_rsa
+  tlssan: 192.168.143.1.sslip.io,192.168.143.1
+  token: secrets
+  mode: 600
+  type: rke2
+  apiport: 6443
+
+default_node: &default_node
+  distro: opensuse155
+  user: opensuse
+
+nodes:
+  - name: rke2cp1
+    network:
+      <<: *default_network
+      ip: &rke2cp1_ip 192.168.143.10
+    vm:
+      <<: *default_vm
+    kubernetes:
+      <<: *default_kubernetes
+      servicetype: server
+    <<: *default_node
+    join: false
+  - name: rke2cp2
+    network:
+      ip: &rke2cp2_ip 192.168.143.11
+      <<: *default_network
+    vm:
+      <<: *default_vm
+    kubernetes:
+      <<: *default_kubernetes
+      servicetype: server
+      server: 192.168.143.1.sslip.io:9345      
+    <<: *default_node
+    join: true   
+  - name: rke2cp3
+    network:
+      ip: &rke2cp3_ip 192.168.143.12
+      <<: *default_network
+    vm:
+      <<: *default_vm
+    kubernetes:
+      <<: *default_kubernetes
+      servicetype: server
+      server: 192.168.143.1.sslip.io:9345      
+    <<: *default_node
+    join: true
+  - name: rke2wk1
+    network:
+      ip: &rke2wk1_ip 192.168.143.20
+      <<: *default_network
+    vm:
+      <<: *default_vm
+    kubernetes:
+      <<: *default_kubernetes
+      servicetype: agent
+      server: 192.168.143.1.sslip.io:9345      
+    <<: *default_node
+    join: true
+  - name: rke2wk2
+    network:
+      ip: &rke2wk2_ip 192.168.143.21
+      <<: *default_network
+    vm:
+      <<: *default_vm
+    kubernetes:
+      <<: *default_kubernetes
+      servicetype: agent
+      server: 192.168.143.1.sslip.io:9345      
+    <<: *default_node
+    join: true
+  - name: rke2wk3
+    network:
+      ip: &rke2wk3_ip 192.168.143.22
+      <<: *default_network
+    vm:
+      <<: *default_vm
+    kubernetes:
+      <<: *default_kubernetes
+      servicetype: agent
+      server: 192.168.143.1.sslip.io:9345      
+    <<: *default_node
+    join: true
+
+loadbalancer:
+  - port: 6443
+    upstream: rke2_api
+    nodes:
+      node1: *rke2cp1_ip
+      node2: *rke2cp2_ip
+      node3: *rke2cp3_ip
+    nodeport: 6443
+  - port: 9345
+    upstream: rke2_mgmt
+    nodes:
+      node1: *rke2cp1_ip
+      node2: *rke2cp2_ip
+      node3: *rke2cp3_ip
+    nodeport: 9345
+  
+
+kubeconfig:
+  - name: rke2                               # Rancher configuration
+    <<: *default_node                        # Include node anchor
+    ip: *rke2cp1_ip                            # Alias to Kubernetes node ip
+    file: ~/.kube/kc_192.168.143.10          # Local filename 
+    merge: true                              # Merge kubeconfig
+    context: rke2_192.168.143.10             # Kubeconfig context
+    server: 192.168.143.10:6443              # Kubeconfig server/port
+    type: rke2                               # Cluster type

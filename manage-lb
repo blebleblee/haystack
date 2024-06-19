@@ -1,0 +1,425 @@
+#!/bin/bash
+set -e
+
+# Set program name variable - basename without subshell
+prog=${0##*/}
+source $(dirname "$(readlink -f "$0")")/functions.sh
+
+function usage ()
+{
+    cat << EOF
+NAME
+    manage-lb - Script to manage nginx based loadbalancer.
+
+SYNOPSIS
+    $prog COMMAND [OPTIONS]
+
+DESCRIPTION
+    A bash script to maintain the loadbalancer configuration.
+
+COMMANDS
+    add-port    - add server port
+    remove-port - remove server port
+    add-node    - add node(s) to specified server port
+    remove-node - remove node(s) from specified server port
+    list        - list nginx config
+    reset       - remove any customization from nginx.conf
+    help        - show this help or help for a subcommand
+EOF
+    exit 0
+}
+
+function usage_subcommand ()
+{
+    case "$1" in
+        add-port)
+            printf "NAME\n"
+            printf "    $prog add-port [OPTIONS]\n"
+            printf "\n"
+            printf "DESCRIPTION\n"
+            printf "    Add new server port.\n"
+            printf "\n"
+            printf "COMMANDS\n"
+            printf "    help - show this help\n"
+            printf "\n"
+            printf "OPTIONS\n"
+            printf "    -h          Display help\n"
+            printf "    -P          Nginx server port\n"
+            printf "    -U          Upstream group name   (required)\n"
+            printf "\n"
+            printf "EXAMPLES\n"
+            printf "    $prog add-port -P 80 -U rancher_http\n"
+            printf "        Create configuration for port 80 and add new upstream named \"rancher_http\".\n"
+            printf "\n"
+            ;;
+        add-node)
+            printf "NAME\n"
+            printf "    $prog add-node [OPTIONS]\n"
+            printf "\n"
+            printf "DESCRIPTION\n"
+            printf "    Add new node/nodes to existing server port.\n"
+            printf "\n"
+            printf "COMMANDS\n"
+            printf "    help - show this help\n"
+            printf "\n"
+            printf "OPTIONS\n"
+            printf "    -h          Display help\n"
+            printf "    -N          IP address of the node\n"
+            printf "    -n          Node port (override server port)\n"
+            printf "    -P          Nginx server port\n"
+            printf "\n"
+            printf "EXAMPLES\n"
+            printf "    $prog add-node -P 80 -N 192.168.200.221 -N 192.168.200.222 -N 192.168.200.223\n"
+            printf "        Add specified nodes to specified port's upstream.\n"
+            printf "\n"
+            ;;
+        remove-port)
+            printf "NAME\n"
+            printf "    $prog remove-port [OPTIONS]\n"
+            printf "\n"
+            printf "DESCRIPTION\n"
+            printf "    Remove server port.\n"
+            printf "\n"
+            printf "COMMANDS\n"
+            printf "    help - show this help\n"
+            printf "\n"
+            printf "OPTIONS\n"
+            printf "    -h          Display help\n"
+            printf "    -P          Nginx server port\n"
+            printf "\n"
+            printf "EXAMPLES\n"
+            printf "    $prog remove-port -P 80\n"
+            printf "        Remove configuration for port 80 and relevant upstream.\n"
+            printf "\n"
+            ;;
+        remove-node)
+            printf "NAME\n"
+            printf "    $prog remove-node [OPTIONS]\n"
+            printf "\n"
+            printf "DESCRIPTION\n"
+            printf "    Remove node/nodes from existing server port.\n"
+            printf "\n"
+            printf "COMMANDS\n"
+            printf "    help - show this help\n"
+            printf "\n"
+            printf "OPTIONS\n"
+            printf "    -h          Display help\n"
+            printf "    -N          IP address of the node\n"
+            printf "    -P          Nginx server port\n"
+            printf "\n"
+            printf "EXAMPLES\n"
+            printf "    $prog remove-node -P 80 -N 192.168.200.221 -N 192.168.200.222 -N 192.168.200.223\n"
+            printf "        Remove nodes from an upstream of port 80.\n"
+            printf "\n"
+            ;;
+        list)
+            printf "NAME\n"
+            printf "    $prog list\n"
+            printf "\n"
+            printf "DESCRIPTION\n"
+            printf "    Show nginx configuration file.\n"
+            ;;
+        reset)
+            printf "NAME\n"
+            printf "    $prog reset\n"
+            printf "\n"
+            printf "DESCRIPTION\n"
+            printf "    Resets the nginx configuration file.\n"
+            printf "\n"
+            printf "OPTIONS\n"
+            printf "    -y          Assume yes to prompts (default: false)\n"
+            printf "    -n          Assume no to prompts  (default: false)\n"
+            printf "\n"
+            ;;
+        *)
+            printf "'$subcommand' is not a valid subcommand.\n"
+            exit 1
+            ;;
+    esac
+    exit 0
+}
+
+function reload_nginx() {
+    outputn "Reloading Nginx..."
+    if [ -x "$(command -v nginx)" ] && [ "$(systemctl is-active nginx)" = "active" ]; then
+        sudo systemctl reload nginx && ok
+    else
+        die "Nginx is not installed or not running."
+    fi
+}
+
+function check_port() {
+    if [ -z "${PORT}" ]; then
+        die "Port value required."
+    fi
+
+    if ! [[ ${PORT} =~ ^[0-9]+$ ]] || [ "${PORT}" -lt 1 ] || [ "${PORT}" -gt 65535 ] || [[ ${PORT} =~ \  ]]; then
+        die "Invalid port number. Please set a valid single port number between 1 and 65535."
+    fi
+}
+
+function check_upstream() {
+    UPSTREAM=$(grep -A3 -P "listen\s+${PORT}" "${NGINX_CONF}"| grep -oP '(?<=proxy_pass ).*?(?=;)')
+    if [ -z "${UPSTREAM}" ]; then
+        die "Upstream name not found for port ${PORT}."
+    fi
+}
+
+function add-port ()
+{
+    while getopts ":P:U:h" opt
+    do
+        case "$opt" in
+            P ) PORT="${OPTARG}" ;;
+            U ) UPSTREAM="${OPTARG}" ;;
+            h ) usage ;;
+            * ) die "Unsupported option. Run 'manage-lb help add-port'." ;;
+        esac
+    done
+
+    check_port
+
+    if grep -Eq "listen\s+${PORT};" "${NGINX_CONF}"; then
+        die "The port number ${PORT} already exists in the config."
+    fi
+
+    if [ -z "${UPSTREAM}" ]; then
+        die "Upstream name required."
+    fi
+
+    if grep -Eq "upstream\s+${UPSTREAM}" "${NGINX_CONF}"; then
+        die "The upstream name ${UPSTREAM} already exists in the config."
+    fi
+
+    # Add the upstream section to the config within the existing stream section
+    sed -i "/stream {/a\ \ \ \ upstream ${UPSTREAM} {\n\ \ \ \ \ \ \ \ least_conn;\n\ \ \ \ }" "${NGINX_CONF}"
+
+    # Add the server node to the config within the existing stream section
+    sed -i "/stream {/a\ \ \ \ server {\n\ \ \ \ \ \ \ \ listen ${PORT};\n\ \ \ \ \ \ \ \ proxy_pass ${UPSTREAM};\n\ \ \ \ }" "${NGINX_CONF}"
+    output "Server port ${PORT} and upstream ${UPSTREAM} added successfully."
+    reload_nginx
+}
+
+function add-node ()
+{
+    while getopts ":N:P:n:h" opt
+    do
+        case "$opt" in
+            N ) NODES+=("${OPTARG}") ;;
+            n ) NODEPORT="${OPTARG}" ;;
+            P ) PORT="${OPTARG}" ;;
+            h ) usage ;;
+            * ) die "Unsupported option. Run 'manage-lb help add-node'." ;;
+        esac
+    done
+
+    local NODE
+
+    check_port
+
+    if ! grep -Eq "listen\s+${PORT};" "${NGINX_CONF}"; then
+        die "The port number ${PORT} does not exist in the config"
+    fi
+
+    check_upstream
+
+    if [ -z "${NODEPORT}" ]; then
+        NODEPORT=${PORT}
+    fi
+
+    for NODE in "${NODES[@]}"; do
+
+        if [ -z "${NODE}" ]; then
+            die "Node IP address required."
+        fi
+
+        if grep -Eq "server\s+${NODE}:${NODEPORT}" "${NGINX_CONF}"; then
+            die "The server ${NODE}:${NODEPORT} already exists in the upstream ${UPSTREAM}."
+        fi
+
+        # Add the server to the upstream section in the config
+        sed -i "/upstream ${UPSTREAM} {/a\ \ \ \ \ \ \ \ server ${NODE}:${NODEPORT} max_fails=${MAX_FAILS} fail_timeout=${FAIL_TIMEOUT};" "${NGINX_CONF}"
+        output "Node ${NODE}:${NODEPORT} added to ${UPSTREAM} succesfully."
+    done
+    reload_nginx
+}
+
+function remove-port ()
+{
+    while getopts ":P:h" opt
+    do
+        case "$opt" in
+            P ) PORT="${OPTARG}" ;;
+            h ) usage ;;
+            * ) die "Unsupported option. Run 'manage-lb help remove-port'." ;;
+        esac
+    done
+
+    check_port
+
+    if ! grep -Eq "listen\s+${PORT};" "${NGINX_CONF}"; then
+        die "The port number $PORT does not exist in the config"
+    fi
+
+    check_upstream
+
+    sed -i '/server {/{:a;N;/}/!ba;/listen[[:blank:]]*'"${PORT}"'/d}' "${NGINX_CONF}"
+    sed -i "/upstream ${UPSTREAM} {/,/}/d" "${NGINX_CONF}"
+    output "Server port ${PORT} and upstream ${UPSTREAM} removed successfully"
+    reload_nginx
+}
+
+function remove-node ()
+{
+    while getopts ":N:P:h" opt
+    do
+        case "$opt" in
+            N ) NODES+=("${OPTARG}") ;;
+            P ) PORT="${OPTARG}" ;;
+            h ) usage ;;
+            * ) die "Unsupported option. Run 'manage-lb help remove-node'." ;;
+        esac
+    done
+
+    local NODE
+
+    check_port
+
+    if ! grep -Eq "listen\s+${PORT};" "${NGINX_CONF}"; then
+        die "The port number $PORT does not exist in the config"
+    fi
+
+    check_upstream
+
+    for NODE in "${NODES[@]}"; do
+
+        if [ -z "${NODE}" ]; then
+            die "Node IP address required."
+        fi
+
+        if ! grep -Eq "server\s+${NODE}:${PORT}" "${NGINX_CONF}"; then
+            die "The server ${NODE}:${PORT} doesn't exist in the upstream ${UPSTREAM}."
+        fi
+
+        # Remove the server from the upstream section in the config
+        sed -i "/upstream ${UPSTREAM} {/,/}/{
+            /server ${NODE}:${PORT}/d;
+            /^\s*$/d; # Delete any resulting empty lines
+        }" "${NGINX_CONF}"
+        output "Node ${NODE} removed from ${UPSTREAM} succesfully."
+    done
+    reload_nginx
+}
+
+function list ()
+{
+    if [ -f "${NGINX_CONF}" ]; then
+        outputn "Reading file ${NGINX_CONF}" && ok
+    else
+        die "The file ${NGINX_CONF} does not exist."
+    fi
+    cat "${NGINX_CONF}"
+}
+
+function reset ()
+{
+
+    while getopts ":yn" opt
+    do
+        case "$opt" in
+            y ) ASSUME_YES=1 ;;
+            n ) ASSUME_NO=1 ;;
+            * ) die "Unsupported option. Run 'manage-lb help create'." ;;
+        esac
+    done
+
+    shift $((OPTIND - 1))
+
+    # Yes (-y) and No (-n) are mutually exclusive.
+    if [[ "${ASSUME_YES}" -eq 1 ]] && [[ "${ASSUME_NO}" -eq 1 ]]
+    then
+        printf "Please specify only one of -y or -n flags.\n"
+        exit 1
+    fi
+
+    if [ -f "${NGINX_CONF}" ]; then
+        echo -n "[WARNING] ${NGINX_CONF} already exists.  Do you want to reset ${NGINX_CONF} [y/N]? "
+        if [ "${ASSUME_YES}" -eq 1 ]; then
+            REPLY="y"
+            echo $REPLY
+        elif [ "${ASSUME_NO}" -eq 1 ]; then
+            REPLY="n"
+            echo $REPLY
+        else
+            read -r
+        fi
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            outputn "Resetting ${NGINX_CONF}."
+        else
+            echo -e "\nNot overwriting ${NGINX_CONF}. Exiting..."
+            exit 1
+        fi
+        cat > "${NGINX_CONF}" << _EOF_
+load_module /usr/lib64/nginx/modules/ngx_stream_module.so;
+worker_processes 4;
+worker_rlimit_nofile 40000;
+events {
+    worker_connections 8192;
+}
+
+stream {
+
+}
+_EOF_
+        ok
+        reload_nginx
+    fi
+}
+
+#--------------------------------------------------
+# Main
+#--------------------------------------------------
+
+subcommand="${1:-none}"
+[[ "${subcommand}" != "none" ]] && shift
+
+case "${subcommand}" in
+    none)
+        usage
+        ;;
+    help)
+        if [[ "${1:-none}" == "none" ]]; then
+            usage
+        elif [[ "$1" =~ ^add-port$|^add-node$|^remove-port$|^remove-node$|^list$|^reset$ ]]; then
+            usage_subcommand "$1"
+        else
+            printf "'$1' is not a valid subcommand.\n\n"
+            usage
+        fi
+        ;;
+    list)
+        set_defaults
+        set_custom_defaults
+        list
+        ;;
+    reset)
+        set_defaults
+        set_custom_defaults
+        reset "$@"
+        ;;
+    add-port|add-node|remove-port|remove-node)
+        if [[ "${1:-none}" == "none" ]]; then
+            usage_subcommand "${subcommand}"
+        elif [[ "$1" =~ ^help$ ]]; then
+            usage_subcommand "${subcommand}"
+        else
+            set_defaults
+            set_custom_defaults
+            "${subcommand}" "$@"
+            exit $?
+        fi
+        ;;
+    *)
+        die "'${subcommand}' is not a valid subcommand.  See 'manage-lb help' for a list of subcommands."
+        ;;
+esac
