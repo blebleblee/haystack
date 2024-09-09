@@ -310,6 +310,15 @@ function fetch_images ()
             DISK_FORMAT=qcow2
             LOGIN_USER=rancher
             ;;
+        harv132)
+            ISOFILE=harvester-v1.3.2-amd64.iso
+            KERNEL=harvester-v1.3.2-vmlinuz-amd64
+            INITRD=harvester-v1.3.2-initrd-amd64
+            OS_VARIANT="sle15sp6"
+            IMAGE_URL=https://releases.rancher.com/harvester/v1.3.2
+            DISK_FORMAT=qcow2
+            LOGIN_USER=rancher
+            ;;    
         harvmaster)
             ISOFILE=harvester-master-amd64.iso
             KERNEL=harvester-master-vmlinuz-amd64
