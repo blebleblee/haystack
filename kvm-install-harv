@@ -318,7 +318,25 @@ function fetch_images ()
             IMAGE_URL=https://releases.rancher.com/harvester/v1.3.2
             DISK_FORMAT=qcow2
             LOGIN_USER=rancher
+            ;;  
+        harv140)
+            ISOFILE=harvester-v1.4.0-amd64.iso
+            KERNEL=harvester-v1.4.0-vmlinuz-amd64
+            INITRD=harvester-v1.4.0-initrd-amd64
+            OS_VARIANT="sle15sp6"
+            IMAGE_URL=https://releases.rancher.com/harvester/v1.4.0
+            DISK_FORMAT=qcow2
+            LOGIN_USER=rancher
             ;;    
+        harv140net)
+            ISOFILE=harvester-v1.4.0-amd64-net-install.iso
+            KERNEL=harvester-v1.4.0-vmlinuz-amd64
+            INITRD=harvester-v1.4.0-initrd-amd64
+            OS_VARIANT="sle15sp6"
+            IMAGE_URL=https://releases.rancher.com/harvester/v1.4.0
+            DISK_FORMAT=qcow2
+            LOGIN_USER=rancher
+            ;;      
         harvmaster)
             ISOFILE=harvester-master-amd64.iso
             KERNEL=harvester-master-vmlinuz-amd64
@@ -710,6 +728,10 @@ _EOF_
     #python -m SimpleHTTPServer &> /dev/null &
     python3 -m http.server &> /dev/null &
     SERVER_PID=$! || die "Could not start web server"
+    
+    if [[ $ISOFILE == *"net-image"* ]]; then
+        NET_IMG="harvester.install.with_net_images=true"
+    fi
 
     # Call virt-install to import the cloud image and create a new VM
     run "Installing the domain" \
@@ -725,7 +747,7 @@ _EOF_
         ${ISO_OPTION} \
         --install "${INSTALL_PARAMS}" \
         --os-variant "${OS_VARIANT}" \
-        --extra-args='harvester.install.automatic=true root=live:CDLABEL=COS_LIVE rd.live.dir=/ rd.live.squashimg=rootfs.squashfs rd.cos.disable console=tty1 console=ttyS0 net.ifnames=1 '"${NET_CONF}"' harvester.install.config_url=http://'"${NET_BR}"':8000/harvester.conf' \
+        --extra-args='harvester.install.automatic=true root=live:CDLABEL=COS_LIVE rd.live.dir=/ rd.live.squashimg=rootfs.squashfs rd.cos.disable console=tty1 console=ttyS0 net.ifnames=1 '"${NET_CONF}"' harvester.install.config_url=http://'"${NET_BR}"':8000/harvester.conf '"{$NET_IMG}"'' \
         --noautoconsole \
         ${GRAPHICS_OPTION} \
         ${VIRT_INSTALL_EXTRA} \
