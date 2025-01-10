@@ -281,6 +281,11 @@ function create ()
         VMNAME=$1
     fi
 
+    if [ "${DEBUG}" -eq 1 ]; then
+      printf "Workload:\n"
+      prepare_ssh_payload
+    fi
+
     ssh -o StrictHostKeyChecking=no -i "${PRIVKEY}" "${LOGIN_USER}"@"${VMNAME}" 2>/dev/null <<< "$(prepare_ssh_payload)"
 }
 
