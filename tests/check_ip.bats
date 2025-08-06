@@ -86,6 +86,16 @@ function remove_test_vm ()
     remove_test_vm ubuntu2204
 }
 
+@test "Install VM (Ubuntu 25.04) - $VMNAME-ubuntu2504" {
+    create_test_vm ubuntu2504
+    [[ "${lines[6]}" =~ "IP address: 192.168.200.222" ]]
+    [ "$status" -eq 0 ]
+}
+
+@test "Delete VM (Ubuntu 25.04) - $VMNAME-ubuntu2504" {
+    remove_test_vm ubuntu2504
+}
+
 @test "Install VM (Debian 12) - $VMNAME-debian12" {
     create_test_vm debian12
     [[ "${lines[6]}" =~ "IP address: 192.168.200.222" ]]
@@ -154,6 +164,16 @@ function remove_test_vm ()
 
 @test "Delete VM (SUSE Linux Enterprise 15 SP6) - $VMNAME-sles156" {
     remove_test_vm sles156
+}
+
+@test "Install VM (SUSE Linux Enterprise 15 SP7) - $VMNAME-sles157" {
+    create_test_vm sles157
+    [[ "${lines[6]}" =~ "IP address: 192.168.200.222" ]]
+    [ "$status" -eq 0 ]
+}
+
+@test "Delete VM (SUSE Linux Enterprise 15 SP7) - $VMNAME-sles157" {
+    remove_test_vm sles157
 }
 
 @test "Install VM (Rocky 9.3) - $VMNAME-rocky93" {

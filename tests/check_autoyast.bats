@@ -47,3 +47,11 @@ function remove_test_autoyast ()
 @test "Delete VM (SUSE Linux Enterprise 15 SP6) - $VMNAME-sles156" {
     remove_test_autoyast sles156
 }
+
+@test "Install VM (SUSE Linux Enterprise 15 SP7) - $VMNAME-sles157" {
+    create_test_autoyast sles157
+}
+
+@test "Delete VM (SUSE Linux Enterprise 15 SP7) - $VMNAME-sles157" {
+    remove_test_autoyast sles157
+}

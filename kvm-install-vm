@@ -89,9 +89,11 @@ function usage_subcommand ()
             printf "    sles155         SUSE Enterprise Linux 15 SP5        sles\n"
             printf "    sles155qu1      SUSE Enterprise Linux 15 SP5 QU1    sles\n"
             printf "    sles156         SUSE Enterprise Linux 15 SP6        sles\n"
+            printf "    sles157         SUSE Enterprise Linux 15 SP7        sles\n"
             printf "    ubuntu1804      Ubuntu 18.04 LTS (Bionic Beaver)    ubuntu\n"
             printf "    ubuntu2004      Ubuntu 20.04 LTS (Focal Fossa)      ubuntu\n"
             printf "    ubuntu2204      Ubuntu 22.04 LTS (Jammy Jellyfish)  ubuntu\n"
+            printf "    ubuntu2204      Ubuntu 25.04 LTS (Plucky Puffin)    ubuntu\n" 
             printf "    rocky9.3        Rocky Linux                         rocky\n"
             printf "    rhel7.9         Red Hat Enterprise Linux 7.9        rhel\n"
             printf "    rhel8.9         Red Hat Enterprise Linux 8.9        rhel\n"
@@ -358,7 +360,14 @@ function fetch_images ()
             IMAGE_URL="${LOCALURL}"  # Manual download
             DISK_FORMAT=qcow2
             LOGIN_USER=sles
-            ;;            
+            ;;
+       sles157)
+            QCOW=SLES15-SP7-Minimal-VM.x86_64-Cloud-GM.qcow2
+            OS_VARIANT="sle15sp7"
+            IMAGE_URL="${LOCALURL}"  # Manual download
+            DISK_FORMAT=qcow2
+            LOGIN_USER=sles
+            ;;                         
         ubuntu1804)
             QCOW=ubuntu-18.04-server-cloudimg-amd64.img
             OS_VARIANT="ubuntu18.04"
@@ -379,7 +388,14 @@ function fetch_images ()
             IMAGE_URL=https://cloud-images.ubuntu.com/releases/22.04/release
             DISK_FORMAT=qcow2
             LOGIN_USER=ubuntu
-            ;;  
+            ;;
+        ubuntu2504)
+            QCOW=ubuntu-25.04-server-cloudimg-amd64.img
+            OS_VARIANT="ubuntu25.04"
+            IMAGE_URL=https://cloud-images.ubuntu.com/releases/25.04/release
+            DISK_FORMAT=qcow2
+            LOGIN_USER=ubuntu
+            ;;       
         *)
             die "${DISTRO} not a supported OS.  Run 'kvm-install-vm create help'."
             ;;
