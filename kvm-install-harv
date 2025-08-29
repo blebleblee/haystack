@@ -100,6 +100,7 @@ function usage_subcommand ()
             printf "    harv143         Harvester 1.4.3                     rancher\n"
             printf "    harv150         Harvester 1.5.0                     rancher\n"            
             printf "    harv151         Harvester 1.5.1                     rancher\n"
+            printf "    harv160         Harvester 1.6.0                     rancher\n"
             printf "    harvmaster      Harvester Master Branch             rancher\n"
             printf "\n"
             printf "EXAMPLES\n"
@@ -448,6 +449,24 @@ function fetch_images ()
             INITRD=harvester-v1.5.1-initrd-amd64
             OS_VARIANT="sle15sp6"
             IMAGE_URL=https://releases.rancher.com/harvester/v1.5.1
+            DISK_FORMAT=qcow2
+            LOGIN_USER=rancher
+            ;;                        
+        harv160)
+            ISOFILE=harvester-v1.6.0-amd64.iso
+            KERNEL=harvester-v1.6.0-vmlinuz-amd64
+            INITRD=harvester-v1.6.0-initrd-amd64
+            OS_VARIANT="sle15sp6"
+            IMAGE_URL=https://releases.rancher.com/harvester/v1.6.0
+            DISK_FORMAT=qcow2
+            LOGIN_USER=rancher
+            ;;    
+        harv160net)
+            ISOFILE=harvester-v1.6.0-amd64-net-install.iso
+            KERNEL=harvester-v1.6.0-vmlinuz-amd64
+            INITRD=harvester-v1.6.0-initrd-amd64
+            OS_VARIANT="sle15sp6"
+            IMAGE_URL=https://releases.rancher.com/harvester/v1.6.0
             DISK_FORMAT=qcow2
             LOGIN_USER=rancher
             ;;                         
