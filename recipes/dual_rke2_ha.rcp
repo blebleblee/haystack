@@ -2,7 +2,7 @@ recipe_desc: |
   Example recipe file.  Two RKE2 single node cluster.
   Loadbalancer is configured for both RKE2 clusters. 
   Requirements: CPU: 12, Memory: 24GB, Disk: 120GB
-  Versions: RKE2 1.26.13+rke2r1, v1.30.1+rke2r1 
+  Versions: default, RKE2 1.33.3+rke2r1 
   Network: 192.168.143.1/24 (br-rancher)
 
 default_network: &default_network             
@@ -29,7 +29,7 @@ default_kubernetes: &default_kubernetes
   mode: 600                                   # kubeconfig ACL
 
 default_node: &default_node                   
-  distro: opensuse155                         # Image distro name
+  distro: opensuse156                         # Image distro name
   user: opensuse                              # Default user
 
 nodes:                                        
@@ -76,7 +76,7 @@ nodes:
       <<: *default_vm                         # Alias to default VM anchor
     kubernetes:                               
       <<: *default_kubernetes                 # Alias to kubernetes anchor settings
-      version: v1.30.1+rke2r1                 # RKE2 version
+      version: v1.33.3+rke2r1                 # RKE2 version
       servicetype: server                     # Node service type (server, agent)
     <<: *default_node                         # Alias to default node settings
     join: false                               # Cluster join (true, false)
@@ -88,7 +88,7 @@ nodes:
       <<: *default_vm                         # Alias to default VM anchor
     kubernetes:                               
       <<: *default_kubernetes                 # Alias to kubernetes anchor settings
-      version: v1.30.1+rke2r1                 # RKE2 version
+      version: v1.33.3+rke2r1                 # RKE2 version
       servicetype: server                     # Node service type (server, agent)
       server: 192.168.143.1.sslip.io:9346  
     <<: *default_node                         # Alias to default node settings
@@ -101,7 +101,7 @@ nodes:
       <<: *default_vm                         # Alias to default VM anchor
     kubernetes:                               
       <<: *default_kubernetes                 # Alias to kubernetes anchor settings
-      version: v1.30.1+rke2r1                 # RKE2 version
+      version: v1.33.3+rke2r1                 # RKE2 version
       servicetype: server                     # Node service type (server, agent)
       server: 192.168.143.1.sslip.io:9346  
     <<: *default_node                         # Alias to default node settings

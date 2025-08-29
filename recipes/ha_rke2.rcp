@@ -1,7 +1,7 @@
 recipe_desc: |
   Example RKE2 HA recipe. 3 control plane and 3 worker nodes.
   Requirements: CPU: 12, Memory: 24GB, Disk: 120GB
-  Versions: RKE2 1.26.13+rke2r1
+  Versions: RKE2 1.33.3+rke2r1
   Network: 192.168.143.1/24 (br-rancher)
 
 default_network: &default_network
@@ -17,7 +17,7 @@ default_vm: &default_vm
   memory: 4096
 
 default_kubernetes: &default_kubernetes
-  version: v1.26.13+rke2r1
+  version: v1.33.3+rke2r1
   channel: stable
   cni: calico
   debug: true
@@ -30,7 +30,7 @@ default_kubernetes: &default_kubernetes
   apiport: 6443
 
 default_node: &default_node
-  distro: opensuse155
+  distro: opensuse156
   user: opensuse
 
 nodes:

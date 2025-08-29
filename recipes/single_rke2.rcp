@@ -2,7 +2,7 @@ recipe_desc: |
   Example recipe file.  Single RKE2 node.
   Loadbalancer is configured for RKE2. 
   Requirements: CPU: 2, Memory: 4GB, Disk: 20GB
-  Versions: RKE2 1.26.13+rke2r1
+  Versions: RKE2 1.33.3+rke2r1
   Network: 192.168.143.1/24 (br-rancher)
 
 default_network: &default_network             
@@ -18,7 +18,7 @@ default_vm: &default_vm
   memory: 4096                                # Default VM memory in MB
 
 default_kubernetes: &default_kubernetes       
-  version: v1.26.13+rke2r1                    # RKE2 version
+  version: v1.33.3+rke2r1                    # RKE2 version
   type: rke2                                  # Kubernetes type
   channel: stable                             # RKE2 channel (stable,latest)
   cni: calico                                 # CNI plugin
@@ -30,7 +30,7 @@ default_kubernetes: &default_kubernetes
   mode: 600                                   # kubeconfig ACL
 
 default_node: &default_node                   
-  distro: opensuse155                         # Image distro name
+  distro: opensuse156                         # Image distro name
   user: opensuse                              # Default user
 
 nodes:                                        

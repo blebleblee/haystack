@@ -23,7 +23,7 @@ default_kubernetes: &default_kubernetes
   privkey: /root/.ssh/id_rsa                  # Path to ssh key for logging to VM
 
 default_node: &default_node                   
-  distro: opensuse155                         # Image distro name
+  distro: opensuse156                         # Image distro name
   user: opensuse                              # Default user
 
 nodes:                                        

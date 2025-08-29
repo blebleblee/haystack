@@ -2,7 +2,7 @@ recipe_desc: |
   Example RKE2 + Rancher + Harvester HA recipe. 
   RKE2 - 3 control plane/worker nodes. 3 Harvester nodes.
   Requirements: CPU: 36, Memory: 128GB, Disk: 2TB
-  Versions: RKE2 1.26.13+rke2r1, Rancher 2.8.4, Harvester 1.3.0
+  Versions: RKE2 1.33.3+rke2r1, Rancher 2.12.1, Harvester 1.6.0
   Network: 192.168.143.1/24 (br-rancher), 192.168.144.1/24 (br-mgmt), 192.168.146.1/24 (br-public)
 
 default_network: &default_network
@@ -18,7 +18,7 @@ default_vm: &default_vm
   memory: 4096
 
 default_kubernetes: &default_kubernetes
-  version: v1.26.13+rke2r1
+  version: v1.33.3+rke2r1
   channel: stable
   cni: calico
   debug: true
@@ -31,7 +31,7 @@ default_kubernetes: &default_kubernetes
   apiport: 6443
 
 default_node: &default_node
-  distro: opensuse155
+  distro: opensuse156
   user: opensuse
 
 default_harvester_net: &default_harvester_net
@@ -40,7 +40,7 @@ default_harvester_net: &default_harvester_net
   bridge: br-mgmt
   domain: example.local
   netmask: 24
-  bond: true
+  bond: false
   addnic: true
   addnicbr: br-public
   vip: 192.168.144.200
@@ -54,7 +54,7 @@ default_harvester_vm: &default_harvester_vm
   nvmesize: 100
 
 default_harvester: &default_harvester 
-  distro: harv130
+  distro: harv160
   skipchecks: true
   token: shhhhh
 
@@ -173,8 +173,8 @@ rancher:
     ip: *ranchercp1_ip                        # Alias to Kubernetes node ip
     namespace: cattle-system                  # Namespace for Rancher installation
     repo: prime                               # Repository (stable, latest, prime)
-    certman: 1.14.1                           # Cert-manager version
-    version: 2.8.4                            # Rancher version
+    certman: 1.17.4                           # Cert-manager version
+    version: 2.12.1                            # Rancher version
     replica: 3                                # Number of replicas
     hostname: 192.168.143.1.sslip.io          # Rancher hostname
     password: admin                           # Bootstrap password

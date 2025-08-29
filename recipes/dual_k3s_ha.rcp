@@ -2,7 +2,7 @@ recipe_desc: |
   Example recipe file.  Two K3S HA clusters.
   Loadbalancer is configured for both K3S clusters. 
   Requirements: CPU: 24, Memory: 48GB, Disk: 240GB
-  Versions: K3S v1.30.1+k3s1, v1.27.14+k3s1
+  Versions: K3S v1.30.1+k3s1, v1.33.3+k3s1
   Network: 192.168.143.1/24 (br-rancher)
 
 default_network: &default_network             
@@ -27,7 +27,7 @@ default_kubernetes: &default_kubernetes
   mode: 600                                   # kubeconfig ACL
 
 default_node: &default_node                   
-  distro: opensuse155                         # Image distro name
+  distro: opensuse156                         # Image distro name
   user: opensuse                              # Default user
 
 nodes:                                        
@@ -117,7 +117,7 @@ nodes:
       <<: *default_vm                         # Alias to default VM anchor
     kubernetes:                               
       <<: *default_kubernetes                 # Alias to kubernetes anchor settings
-      version: v1.27.14+k3s1
+      version: v1.33.3+k3s1
       servicetype: server                     # Node service type (server, agent)
       clusterinit: true 
     <<: *default_node                         # Alias to default node settings
@@ -130,7 +130,7 @@ nodes:
       <<: *default_vm                         # Alias to default VM anchor
     kubernetes:                               
       <<: *default_kubernetes                 # Alias to kubernetes anchor settings
-      version: v1.27.14+k3s1
+      version: v1.33.3+k3s1
       servicetype: server                     # Node service type (server, agent)
       server: 192.168.143.1.sslip.io:6444  
     <<: *default_node                         # Alias to default node settings
@@ -143,7 +143,7 @@ nodes:
       <<: *default_vm                         # Alias to default VM anchor
     kubernetes:                               
       <<: *default_kubernetes                 # Alias to kubernetes anchor settings
-      version: v1.27.14+k3s1
+      version: v1.33.3+k3s1
       servicetype: server                     # Node service type (server, agent)
       server: 192.168.143.1.sslip.io:6444  
     <<: *default_node                         # Alias to default node settings
@@ -158,7 +158,7 @@ nodes:
       <<: *default_kubernetes                 # Alias to kubernetes anchor settings
       servicetype: agent                      # Node service type (server, agent)
       server: 192.168.143.1.sslip.io:6444  
-      version: v1.27.14+k3s1
+      version: v1.33.3+k3s1
     <<: *default_node                         # Alias to default node settings
     join: true                                # Cluster join (true, false)     
   - name: nodeb5                               # Node name
@@ -171,7 +171,7 @@ nodes:
       <<: *default_kubernetes                 # Alias to kubernetes anchor settings
       servicetype: agent                      # Node service type (server, agent)
       server: 192.168.143.1.sslip.io:6444  
-      version: v1.27.14+k3s1
+      version: v1.33.3+k3s1
     <<: *default_node                         # Alias to default node settings
     join: true                                # Cluster join (true, false)       
   - name: nodeb6                              # Node name
@@ -184,7 +184,7 @@ nodes:
       <<: *default_kubernetes                 # Alias to kubernetes anchor settings
       servicetype: agent                      # Node service type (server, agent)
       server: 192.168.143.1.sslip.io:6444  
-      version: v1.27.14+k3s1
+      version: v1.33.3+k3s1
     <<: *default_node                         # Alias to default node settings
     join: true                                # Cluster join (true, false)      
 

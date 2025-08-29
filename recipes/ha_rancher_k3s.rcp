@@ -2,7 +2,7 @@ recipe_desc: |
   This is the example recipe file.  Rancher on K3S nodes.
   Loadbalancer is configured for K3S/Rancher HA. 
   Requirements: CPU: 12, Memory: 24GB, Disk: 120GB
-  Versions: K3S 1.26.13+k3s1, Rancher 2.8.4
+  Versions: K3S 1.33.3+k3s1, Rancher 2.12.1
   Network: 192.168.143.1/24 (br-rancher)
 
 default_network: &default_network             
@@ -18,7 +18,7 @@ default_vm: &default_vm
   memory: 4096                                # Default VM memory in MB
 
 default_kubernetes: &default_kubernetes       
-  version: v1.26.13+k3s1                     # RKE2 version
+  version: v1.33.3+k3s1                     # RKE2 version
   type: k3s                                   # Kubernetes type
   channel: stable                             # RKE2 channel (stable,latest)
   debug: true                                 # Turn debug on/off
@@ -28,7 +28,7 @@ default_kubernetes: &default_kubernetes
   mode: 600                                   # kubeconfig ACL
 
 default_node: &default_node                   
-  distro: opensuse155                         # Image distro name
+  distro: opensuse156                         # Image distro name
   user: opensuse                              # Default user
 
 nodes:                                        
@@ -140,8 +140,8 @@ rancher:
     ip: *node1_ip                             # Alias to Kubernetes node ip
     namespace: cattle-system                  # Namespace for Rancher installation
     repo: prime                               # Repository (stable, latest, prime)
-    certman: 1.14.1                           # Cert-manager version
-    version: 2.8.4                            # Rancher version
+    certman: 1.17.4                           # Cert-manager version
+    version: 2.12.1                            # Rancher version
     replica: 3                                # Number of replicas
     hostname: 192.168.143.1.sslip.io          # Rancher hostname
     password: admin                           # Bootstrap password

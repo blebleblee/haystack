@@ -1,7 +1,7 @@
 recipe_desc: |
   Example Harvester HA recipe - three Harvester nodes.
   Requirements: CPU: 24, Memory: 96GB, Disk: 1.5TB
-  Versions: Harvester 1.4.0
+  Versions: Harvester 1.6.0
   Network: 192.168.144.1/24 (br-mgmt), 192.168.146.1/24 (br-public)
 
 default_harvester_net: &default_harvester_net
@@ -10,7 +10,7 @@ default_harvester_net: &default_harvester_net
   bridge: br-mgmt
   domain: example.local
   netmask: 24
-  bond: true
+  bond: false
   addnic: true
   addnicbr: br-public
   vip: 192.168.144.200
@@ -24,7 +24,7 @@ default_harvester_vm: &default_harvester_vm
   nvmesize: 100
 
 default_harvester: &default_harvester 
-  distro: harv140
+  distro: harv160
   skipchecks: true
   token: shhhhh
 
