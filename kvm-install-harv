@@ -100,7 +100,9 @@ function usage_subcommand ()
             printf "    harv143         Harvester 1.4.3                     rancher\n"
             printf "    harv150         Harvester 1.5.0                     rancher\n"            
             printf "    harv151         Harvester 1.5.1                     rancher\n"
+            printf "    harv152         Harvester 1.5.2                     rancher\n"
             printf "    harv160         Harvester 1.6.0                     rancher\n"
+            printf "    harv161         Harvester 1.6.1                     rancher\n"
             printf "    harvmaster      Harvester Master Branch             rancher\n"
             printf "\n"
             printf "EXAMPLES\n"
@@ -451,7 +453,25 @@ function fetch_images ()
             IMAGE_URL=https://releases.rancher.com/harvester/v1.5.1
             DISK_FORMAT=qcow2
             LOGIN_USER=rancher
-            ;;                        
+            ;;
+        harv152)
+            ISOFILE=harvester-v1.5.2-amd64.iso
+            KERNEL=harvester-v1.5.2-vmlinuz-amd64
+            INITRD=harvester-v1.5.2-initrd-amd64
+            OS_VARIANT="sle15sp6"
+            IMAGE_URL=https://releases.rancher.com/harvester/v1.5.2
+            DISK_FORMAT=qcow2
+            LOGIN_USER=rancher
+            ;;    
+        harv152net)
+            ISOFILE=harvester-v1.5.2-amd64-net-install.iso
+            KERNEL=harvester-v1.5.2-vmlinuz-amd64
+            INITRD=harvester-v1.5.2-initrd-amd64
+            OS_VARIANT="sle15sp6"
+            IMAGE_URL=https://releases.rancher.com/harvester/v1.5.2
+            DISK_FORMAT=qcow2
+            LOGIN_USER=rancher
+            ;;
         harv160)
             ISOFILE=harvester-v1.6.0-amd64.iso
             KERNEL=harvester-v1.6.0-vmlinuz-amd64
@@ -469,7 +489,25 @@ function fetch_images ()
             IMAGE_URL=https://releases.rancher.com/harvester/v1.6.0
             DISK_FORMAT=qcow2
             LOGIN_USER=rancher
-            ;;                         
+            ;;
+        harv161)
+            ISOFILE=harvester-v1.6.1-amd64.iso
+            KERNEL=harvester-v1.6.1-vmlinuz-amd64
+            INITRD=harvester-v1.6.1-initrd-amd64
+            OS_VARIANT="sle15sp6"
+            IMAGE_URL=https://releases.rancher.com/harvester/v1.6.1
+            DISK_FORMAT=qcow2
+            LOGIN_USER=rancher
+            ;;    
+        harv161net)
+            ISOFILE=harvester-v1.6.1-amd64-net-install.iso
+            KERNEL=harvester-v1.6.1-vmlinuz-amd64
+            INITRD=harvester-v1.6.1-initrd-amd64
+            OS_VARIANT="sle15sp6"
+            IMAGE_URL=https://releases.rancher.com/harvester/v1.6.1
+            DISK_FORMAT=qcow2
+            LOGIN_USER=rancher
+            ;;
         harvmaster)
             ISOFILE=harvester-master-amd64.iso
             KERNEL=harvester-master-vmlinuz-amd64
