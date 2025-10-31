@@ -292,6 +292,7 @@ create_lb() {
                 # Prefix the value with -X and append to the combined string
                 if [ "${BOOTSTRAP_LB}" = true ]; then
                     NODES_COMBINED=" -N ${VALUE}"
+                    break
                 else
                     NODES_COMBINED+=" -N ${VALUE}"
                 fi
